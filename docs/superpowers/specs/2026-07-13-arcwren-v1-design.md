@@ -1,6 +1,6 @@
 # ArcWren v1 Design
 
-Status: approved direction; implementation pending written-spec review
+Status: approved for implementation
 Date: 2026-07-13
 
 ## Product thesis

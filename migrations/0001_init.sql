@@ -1,7 +1,8 @@
 CREATE TABLE IF NOT EXISTS migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
-    applied_at TEXT NOT NULL
+    applied_at TEXT NOT NULL,
+    checksum TEXT NOT NULL
 );
 
 CREATE TABLE sessions (

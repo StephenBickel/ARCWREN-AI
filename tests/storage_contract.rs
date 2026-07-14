@@ -69,7 +69,83 @@ fn fresh_database_is_migrated_and_configured_for_durable_use() -> Result<(), Box
         row.get::<_, u64>(0)
     })?;
     assert_eq!(migrations, 1);
+    let checksum = connection.query_row(
+        "SELECT checksum FROM migrations WHERE version = 1",
+        [],
+        |row| row.get::<_, String>(0),
+    )?;
+    assert_eq!(checksum.len(), 64);
+    assert!(
+        checksum
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
 
+    drop(connection);
+    drop(store);
+    let reopened = Store::open(database.path())?;
+    assert_eq!(reopened.journal_mode()?, "wal");
+    let connection = Connection::open(database.path())?;
+    let migrations = connection.query_row("SELECT COUNT(*) FROM migrations", [], |row| {
+        row.get::<_, u64>(0)
+    })?;
+    assert_eq!(migrations, 1);
+
+    Ok(())
+}
+
+#[test]
+fn store_open_rejects_a_database_that_cannot_enable_wal() {
+    let error = open_error(":memory:");
+    assert!(matches!(
+        error,
+        ArcWrenError::Storage { ref detail }
+            if detail.contains("journal mode") && detail.contains("memory")
+    ));
+}
+
+#[test]
+fn store_open_rejects_a_future_database_migration() -> Result<(), Box<dyn Error>> {
+    let database = TemporaryDatabase::new();
+    drop(Store::open(database.path())?);
+
+    let connection = Connection::open(database.path())?;
+    ensure_checksum_column(&connection)?;
+    connection.execute(
+        "INSERT INTO migrations (version, name, applied_at, checksum)
+         VALUES (2, 'future migration', '2026-07-13T12:00:00Z', ?1)",
+        ["ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"],
+    )?;
+    drop(connection);
+
+    let error = open_error(database.path());
+    assert!(matches!(
+        error,
+        ArcWrenError::Storage { ref detail }
+            if detail.contains("unsupported database migration version 2")
+    ));
+    Ok(())
+}
+
+#[test]
+fn store_open_rejects_a_tampered_migration_checksum() -> Result<(), Box<dyn Error>> {
+    let database = TemporaryDatabase::new();
+    drop(Store::open(database.path())?);
+
+    let connection = Connection::open(database.path())?;
+    ensure_checksum_column(&connection)?;
+    connection.execute(
+        "UPDATE migrations SET checksum = ?1 WHERE version = 1",
+        ["0000000000000000000000000000000000000000000000000000000000000000"],
+    )?;
+    drop(connection);
+
+    let error = open_error(database.path());
+    assert!(matches!(
+        error,
+        ArcWrenError::Storage { ref detail }
+            if detail.contains("migration 1 checksum mismatch")
+    ));
     Ok(())
 }
 
@@ -123,6 +199,51 @@ fn appends_allocate_monotonic_per_session_sequences_and_read_in_order() -> Resul
 }
 
 #[test]
+fn sessions_and_events_survive_store_reopen() -> Result<(), Box<dyn Error>> {
+    let database = TemporaryDatabase::new();
+    let mut store = Store::open(database.path())?;
+    let session = store.create_session()?;
+    let event = store.append(
+        session.id,
+        None,
+        Event::UserInput {
+            text: "persist me".into(),
+        },
+    )?;
+    drop(store);
+
+    let reopened = Store::open(database.path())?;
+    assert_eq!(reopened.list_sessions()?[0].id, session.id);
+    assert_eq!(reopened.read_events(session.id)?, vec![event]);
+    Ok(())
+}
+
+#[test]
+fn independent_store_connections_coordinate_event_sequences() -> Result<(), Box<dyn Error>> {
+    let database = TemporaryDatabase::new();
+    let mut first_store = Store::open(database.path())?;
+    let session = first_store.create_session()?;
+    let mut second_store = Store::open(database.path())?;
+
+    let first = first_store.append(session.id, None, Event::UserInput { text: "one".into() })?;
+    let second = second_store.append(session.id, None, Event::UserInput { text: "two".into() })?;
+    let third = first_store.append(
+        session.id,
+        None,
+        Event::UserInput {
+            text: "three".into(),
+        },
+    )?;
+
+    assert_eq!([first.sequence, second.sequence, third.sequence], [1, 2, 3]);
+    assert_eq!(
+        second_store.read_events(session.id)?,
+        vec![first, second, third]
+    );
+    Ok(())
+}
+
+#[test]
 fn approvals_persist_pending_and_resolved_state() -> Result<(), Box<dyn Error>> {
     let database = TemporaryDatabase::new();
     let store = Store::open(database.path())?;
@@ -133,11 +254,17 @@ fn approvals_persist_pending_and_resolved_state() -> Result<(), Box<dyn Error>> 
     let pending =
         store.create_approval(session.id, approval_id, tool_call_id, "Read project notes")?;
     assert_eq!(pending.status, ApprovalStatus::Pending);
+    drop(store);
+
+    let store = Store::open(database.path())?;
     assert_eq!(store.get_approval(approval_id)?, Some(pending));
 
     let allowed = store.resolve_approval(approval_id, ApprovalStatus::Allowed)?;
     assert_eq!(allowed.status, ApprovalStatus::Allowed);
     assert!(allowed.resolved_at.is_some());
+    drop(store);
+
+    let store = Store::open(database.path())?;
     assert_eq!(store.get_approval(approval_id)?, Some(allowed));
 
     Ok(())
@@ -150,11 +277,17 @@ fn explicit_memories_are_retained_when_forgotten() -> Result<(), Box<dyn Error>>
 
     let active = store.remember_explicit("The owner prefers terse output", "user request")?;
     assert_eq!(active.state, MemoryState::Active);
+    drop(store);
+
+    let store = Store::open(database.path())?;
     assert_eq!(store.list_active_memories()?, vec![active.clone()]);
 
     let forgotten = store.forget_memory(active.id)?;
     assert_eq!(forgotten.state, MemoryState::Forgotten);
     assert!(forgotten.forgotten_at.is_some());
+    drop(store);
+
+    let store = Store::open(database.path())?;
     assert!(store.list_active_memories()?.is_empty());
     assert_eq!(store.get_memory(active.id)?, Some(forgotten));
 
@@ -231,4 +364,25 @@ fn inject_future_event(path: &Path, session_id: SessionId) -> Result<(), Box<dyn
         ],
     )?;
     Ok(())
+}
+
+fn ensure_checksum_column(connection: &Connection) -> Result<(), Box<dyn Error>> {
+    let columns = connection.query_row(
+        "SELECT COUNT(*)
+         FROM pragma_table_info('migrations')
+         WHERE name = 'checksum'",
+        [],
+        |row| row.get::<_, u64>(0),
+    )?;
+    if columns == 0 {
+        connection.execute_batch("ALTER TABLE migrations ADD COLUMN checksum TEXT;")?;
+    }
+    Ok(())
+}
+
+fn open_error(path: impl AsRef<Path>) -> ArcWrenError {
+    match Store::open(path) {
+        Ok(_) => panic!("Store::open unexpectedly accepted an incompatible database"),
+        Err(error) => error,
+    }
 }

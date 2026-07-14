@@ -110,9 +110,18 @@ impl Store {
         connection
             .pragma_update(None, "foreign_keys", "ON")
             .map_err(storage_error)?;
-        connection
-            .pragma_update(None, "journal_mode", "WAL")
+        let journal_mode = connection
+            .query_row("PRAGMA journal_mode = WAL", [], |row| {
+                row.get::<_, String>(0)
+            })
             .map_err(storage_error)?;
+        if !journal_mode.eq_ignore_ascii_case("wal") {
+            return Err(ArcWrenError::Storage {
+                detail: format!(
+                    "SQLite journal mode is {journal_mode:?}; WAL is required for durable storage"
+                ),
+            });
+        }
         schema::migrate(&mut connection)?;
 
         Ok(Self { connection })

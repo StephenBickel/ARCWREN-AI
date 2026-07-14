@@ -65,7 +65,11 @@ impl ScriptedProvider {
 
     #[must_use]
     pub fn recorded_requests(&self) -> Vec<ModelRequest> {
-        lock_state(&self.state).recorded_requests.clone()
+        lock_state(&self.state)
+            .recorded_requests
+            .iter()
+            .map(detached_request)
+            .collect()
     }
 }
 
@@ -89,7 +93,7 @@ impl Provider for ScriptedProvider {
                     .ok_or(ProviderError::ScriptExhausted {
                         response_count: self.response_count,
                     })?;
-                state.recorded_requests.push(request);
+                state.recorded_requests.push(detached_request(&request));
                 events
             };
 
@@ -121,7 +125,12 @@ impl Stream for ScriptedEventStream {
         }
 
         match self.events.pop_front() {
-            Some(event) => Poll::Ready(Some(Ok(event))),
+            Some(event) => {
+                if matches!(event, ProviderEvent::Finish { .. }) {
+                    self.finished = true;
+                }
+                Poll::Ready(Some(Ok(event)))
+            }
             None => {
                 self.finished = true;
                 Poll::Ready(None)
@@ -140,6 +149,14 @@ fn validate_fixture(fixture: &ScriptFixture) -> Result<(), ProviderError> {
     if !fixture.capabilities.streaming {
         return invalid_fixture("scripted provider fixtures require streaming capability");
     }
+    if fixture.capabilities.parallel_tool_calls && !fixture.capabilities.structured_tool_calls {
+        return invalid_fixture(
+            "parallel_tool_calls requires the structured_tool_calls capability",
+        );
+    }
+    if fixture.responses.is_empty() {
+        return invalid_fixture("scripted provider fixtures require at least one response");
+    }
 
     for (response_index, response) in fixture.responses.iter().enumerate() {
         let response_number = response_index + 1;
@@ -153,7 +170,7 @@ fn validate_fixture(fixture: &ScriptFixture) -> Result<(), ProviderError> {
         }
 
         let mut finish_count = 0;
-        let mut has_tool_call = false;
+        let mut tool_call_count = 0;
         for event in &response.events {
             match event {
                 ProviderEvent::TextDelta { text } if text.is_empty() => {
@@ -164,7 +181,7 @@ fn validate_fixture(fixture: &ScriptFixture) -> Result<(), ProviderError> {
                 ProviderEvent::ToolCall {
                     name, arguments, ..
                 } => {
-                    has_tool_call = true;
+                    tool_call_count += 1;
                     if !fixture.capabilities.structured_tool_calls {
                         return invalid_fixture(format!(
                             "response {response_number} emits a tool call but structured_tool_calls is false"
@@ -180,6 +197,11 @@ fn validate_fixture(fixture: &ScriptFixture) -> Result<(), ProviderError> {
                             "response {response_number} tool arguments must be an object"
                         ));
                     }
+                    if tool_call_count > 1 && !fixture.capabilities.parallel_tool_calls {
+                        return invalid_fixture(format!(
+                            "response {response_number} contains multiple tool calls but parallel_tool_calls is false"
+                        ));
+                    }
                 }
                 ProviderEvent::Usage { .. } if !fixture.capabilities.usage_reporting => {
                     return invalid_fixture(format!(
@@ -188,7 +210,7 @@ fn validate_fixture(fixture: &ScriptFixture) -> Result<(), ProviderError> {
                 }
                 ProviderEvent::Finish { reason } => {
                     finish_count += 1;
-                    if *reason == FinishReason::ToolCalls && !has_tool_call {
+                    if *reason == FinishReason::ToolCalls && tool_call_count == 0 {
                         return invalid_fixture(format!(
                             "response {response_number} finishes for tool_calls without a tool call"
                         ));
@@ -210,6 +232,15 @@ fn invalid_fixture<T>(detail: impl Into<String>) -> Result<T, ProviderError> {
     Err(ProviderError::InvalidFixture {
         detail: detail.into(),
     })
+}
+
+fn detached_request(request: &ModelRequest) -> ModelRequest {
+    ModelRequest {
+        messages: request.messages.clone(),
+        tools: request.tools.clone(),
+        settings: request.settings.clone(),
+        cancellation: CancellationToken::new(),
+    }
 }
 
 fn lock_state(state: &Mutex<ScriptState>) -> MutexGuard<'_, ScriptState> {

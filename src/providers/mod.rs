@@ -9,6 +9,7 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+use crate::error::ErrorCode;
 use crate::events::ToolCallId;
 
 pub type ProviderStream =
@@ -141,4 +142,33 @@ pub enum ProviderError {
     ScriptExhausted { response_count: usize },
     #[error("scripted provider fixture is invalid")]
     InvalidFixture { detail: String },
+}
+
+impl ProviderError {
+    #[must_use]
+    pub const fn code(&self) -> ErrorCode {
+        match self {
+            Self::Authentication { .. } => ErrorCode::Authentication,
+            Self::RateLimit { .. } => ErrorCode::RateLimit,
+            Self::InvalidRequest { .. } | Self::InvalidFixture { .. } => ErrorCode::Validation,
+            Self::Cancelled => ErrorCode::Cancelled,
+            Self::Transport { .. }
+            | Self::InvalidResponse { .. }
+            | Self::ScriptExhausted { .. } => ErrorCode::Provider,
+        }
+    }
+
+    #[must_use]
+    pub const fn user_message(&self) -> &'static str {
+        match self {
+            Self::Authentication { .. } => "Authentication failed.",
+            Self::RateLimit { .. } => "The model provider is temporarily rate limited.",
+            Self::InvalidRequest { .. } => "The provider request is invalid.",
+            Self::Cancelled => "The provider operation was cancelled.",
+            Self::InvalidFixture { .. } => "The scripted provider fixture is invalid.",
+            Self::Transport { .. }
+            | Self::InvalidResponse { .. }
+            | Self::ScriptExhausted { .. } => "The model provider request failed.",
+        }
+    }
 }

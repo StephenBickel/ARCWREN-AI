@@ -73,29 +73,29 @@ impl fmt::Display for BudgetResource {
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum ArcWrenError {
-    #[error("configuration error: {detail}")]
+    #[error("ArcWren's configuration is invalid.")]
     Configuration { detail: String },
-    #[error("authentication error: {detail}")]
+    #[error("Authentication failed.")]
     Authentication { detail: String },
-    #[error("provider error: {detail}")]
+    #[error("The model provider request failed.")]
     Provider { detail: String },
-    #[error("provider rate limit: {detail}")]
+    #[error("The model provider is temporarily rate limited.")]
     RateLimit { detail: String },
-    #[error("policy error: {detail}")]
+    #[error("The requested action is not allowed.")]
     Policy { detail: String },
-    #[error("validation error: {detail}")]
+    #[error("The request is invalid.")]
     Validation { detail: String },
-    #[error("tool error: {detail}")]
+    #[error("The tool failed.")]
     Tool { detail: String },
-    #[error("storage error: {detail}")]
+    #[error("ArcWren could not access its local data.")]
     Storage { detail: String },
-    #[error("channel error: {detail}")]
+    #[error("The frontend connection failed.")]
     Channel { detail: String },
-    #[error("operation timed out: {detail}")]
+    #[error("The operation timed out.")]
     Timeout { detail: String },
-    #[error("operation cancelled: {detail}")]
+    #[error("The operation was cancelled.")]
     Cancelled { detail: String },
-    #[error("turn budget exceeded for {resource} (limit: {limit})")]
+    #[error("The turn reached its configured budget.")]
     BudgetExceeded {
         resource: BudgetResource,
         limit: u32,

@@ -6,20 +6,32 @@ use serde_json::{Value, json};
 
 #[test]
 fn every_event_has_a_stable_type_and_schema_version() -> Result<(), Box<dyn std::error::Error>> {
-    let tool_call_id = ToolCallId::new();
-    let approval_id = ApprovalId::new();
+    let tool_call_id = ToolCallId::from_uuid(uuid::Uuid::parse_str(
+        "11111111-1111-4111-8111-111111111111",
+    )?);
+    let approval_id = ApprovalId::from_uuid(uuid::Uuid::parse_str(
+        "22222222-2222-4222-8222-222222222222",
+    )?);
     let cases = [
         (
             Event::UserInput {
                 text: "hello".into(),
             },
-            "user_input",
+            json!({
+                "schema_version": 1,
+                "type": "user_input",
+                "text": "hello",
+            }),
         ),
         (
             Event::AssistantTextDelta {
                 text: "world".into(),
             },
-            "assistant_text_delta",
+            json!({
+                "schema_version": 1,
+                "type": "assistant_text_delta",
+                "text": "world",
+            }),
         ),
         (
             Event::ToolProposed {
@@ -27,7 +39,13 @@ fn every_event_has_a_stable_type_and_schema_version() -> Result<(), Box<dyn std:
                 tool_name: "fs.read".into(),
                 arguments: json!({"path": "notes.txt"}),
             },
-            "tool_proposed",
+            json!({
+                "schema_version": 1,
+                "type": "tool_proposed",
+                "tool_call_id": "11111111-1111-4111-8111-111111111111",
+                "tool_name": "fs.read",
+                "arguments": {"path": "notes.txt"},
+            }),
         ),
         (
             Event::ApprovalRequested {
@@ -35,32 +53,68 @@ fn every_event_has_a_stable_type_and_schema_version() -> Result<(), Box<dyn std:
                 tool_call_id,
                 summary: "Read notes.txt".into(),
             },
-            "approval_requested",
+            json!({
+                "schema_version": 1,
+                "type": "approval_requested",
+                "approval_id": "22222222-2222-4222-8222-222222222222",
+                "tool_call_id": "11111111-1111-4111-8111-111111111111",
+                "summary": "Read notes.txt",
+            }),
         ),
         (
             Event::ToolCompleted {
                 tool_call_id,
                 output: json!({"text": "contents"}),
             },
-            "tool_completed",
+            json!({
+                "schema_version": 1,
+                "type": "tool_completed",
+                "tool_call_id": "11111111-1111-4111-8111-111111111111",
+                "output": {"text": "contents"},
+            }),
         ),
-        (Event::TurnCompleted, "turn_completed"),
+        (
+            Event::TurnCompleted,
+            json!({
+                "schema_version": 1,
+                "type": "turn_completed",
+            }),
+        ),
         (
             Event::TurnInterrupted {
                 reason: "cancelled".into(),
             },
-            "turn_interrupted",
+            json!({
+                "schema_version": 1,
+                "type": "turn_interrupted",
+                "reason": "cancelled",
+            }),
         ),
     ];
 
-    for (event, expected_type) in cases {
+    for (event, expected_json) in cases {
         let encoded = serde_json::to_value(&event)?;
-        assert_eq!(encoded["type"], expected_type);
-        assert_eq!(encoded["schema_version"], 1);
+        assert_eq!(encoded, expected_json);
         assert_eq!(serde_json::from_value::<Event>(encoded)?, event);
     }
 
     Ok(())
+}
+
+#[test]
+fn event_rejects_an_unknown_future_schema_version() {
+    let error = serde_json::from_value::<Event>(json!({
+        "schema_version": 2,
+        "type": "user_input",
+        "text": "hello",
+    }))
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported event schema version 2")
+    );
 }
 
 #[test]
@@ -147,6 +201,27 @@ fn budget_tracker_rejects_counts_beyond_each_limit_without_incrementing() {
 }
 
 #[test]
+fn zero_budget_rejects_the_first_iteration_and_tool_call() {
+    let mut tracker = BudgetTracker::new(TurnBudget::new(0, 0));
+
+    assert_eq!(
+        tracker.try_record_iteration(),
+        Err(ArcWrenError::BudgetExceeded {
+            resource: BudgetResource::Iterations,
+            limit: 0,
+        })
+    );
+    assert_eq!(
+        tracker.try_record_tool_call(),
+        Err(ArcWrenError::BudgetExceeded {
+            resource: BudgetResource::ToolCalls,
+            limit: 0,
+        })
+    );
+    assert_eq!((tracker.iterations(), tracker.tool_calls()), (0, 0));
+}
+
+#[test]
 fn errors_expose_stable_codes_and_sanitized_user_messages() -> Result<(), Box<dyn std::error::Error>>
 {
     let secret = "provider response included sk-secret";
@@ -168,4 +243,46 @@ fn errors_expose_stable_codes_and_sanitized_user_messages() -> Result<(), Box<dy
     );
 
     Ok(())
+}
+
+#[test]
+fn every_error_code_has_a_stable_public_string() -> Result<(), Box<dyn std::error::Error>> {
+    let cases = [
+        (ErrorCode::Configuration, "configuration_error"),
+        (ErrorCode::Authentication, "authentication_error"),
+        (ErrorCode::Provider, "provider_error"),
+        (ErrorCode::RateLimit, "rate_limit"),
+        (ErrorCode::Policy, "policy_error"),
+        (ErrorCode::Validation, "validation_error"),
+        (ErrorCode::Tool, "tool_error"),
+        (ErrorCode::Storage, "storage_error"),
+        (ErrorCode::Channel, "channel_error"),
+        (ErrorCode::Timeout, "timeout"),
+        (ErrorCode::Cancelled, "cancelled"),
+        (ErrorCode::BudgetExceeded, "budget_exceeded"),
+    ];
+
+    for (code, expected) in cases {
+        assert_eq!(code.as_str(), expected);
+        assert_eq!(code.to_string(), expected);
+        assert_eq!(serde_json::to_value(code)?, expected);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn error_display_does_not_expose_internal_detail() {
+    let secret = "provider response included sk-secret";
+    let error = ArcWrenError::Provider {
+        detail: secret.into(),
+    };
+
+    let rendered = error.to_string();
+    assert_eq!(rendered, error.user_message());
+    assert!(!rendered.contains(secret));
+    assert!(matches!(
+        error,
+        ArcWrenError::Provider { ref detail } if detail == secret
+    ));
 }

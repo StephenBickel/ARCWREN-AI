@@ -67,7 +67,7 @@ fn run_commands<'a>(job: &'a Mapping, context: &str) -> Result<Vec<&'a str>, Str
 }
 
 fn validate_common(root: &Mapping, workflow: &str) -> Result<(), String> {
-    reject_keys(root, "workflow", &["defaults"])?;
+    reject_keys(root, "workflow", &["defaults", "env"])?;
 
     let permissions = value_map(
         field(root, "permissions", "workflow")?,
@@ -216,6 +216,21 @@ fn triggers(root: &Mapping) -> Result<&Mapping, String> {
     value_map(field(root, "on", "workflow")?, "workflow.on")
 }
 
+fn validate_exact_trigger_keys(
+    triggers: &Mapping,
+    expected: &[&str],
+    description: &str,
+) -> Result<(), String> {
+    let contains_exact_keys = triggers.len() == expected.len()
+        && expected
+            .iter()
+            .all(|key| triggers.contains_key(Value::String((*key).to_owned())));
+    if !contains_exact_keys {
+        return Err(format!("workflow.on must contain exactly {description}"));
+    }
+    Ok(())
+}
+
 fn reject_keys(mapping: &Mapping, context: &str, rejected_keys: &[&str]) -> Result<(), String> {
     for key in rejected_keys {
         if mapping.contains_key(Value::String((*key).to_owned())) {
@@ -323,6 +338,11 @@ fn validate_ci_workflow(workflow: &str) -> Result<(), String> {
     validate_common(root, workflow)?;
 
     let triggers = triggers(root)?;
+    validate_exact_trigger_keys(
+        triggers,
+        &["push", "pull_request"],
+        "`push` and `pull_request`",
+    )?;
     let push = value_map(field(triggers, "push", "workflow.on")?, "workflow.on.push")?;
     let push_branches = field(push, "branches", "workflow.on.push")?
         .as_sequence()
@@ -437,6 +457,11 @@ fn validate_security_workflow(workflow: &str) -> Result<(), String> {
     validate_common(root, workflow)?;
 
     let triggers = triggers(root)?;
+    validate_exact_trigger_keys(
+        triggers,
+        &["schedule", "workflow_dispatch"],
+        "`schedule` and `workflow_dispatch`",
+    )?;
     let schedule = field(triggers, "schedule", "workflow.on")?
         .as_sequence()
         .ok_or_else(|| {
@@ -776,6 +801,17 @@ fn checker_rejects_workflow_run_defaults() {
 }
 
 #[test]
+fn checker_rejects_path_env_on_workflow() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "name: CI\n\n",
+        "name: CI\n\nenv:\n  PATH: /tmp/untrusted\n\n",
+    );
+
+    assert_ci_rejected(&workflow, "workflow must not define `env`");
+}
+
+#[test]
 fn checker_rejects_job_run_defaults() {
     let workflow = replace_in_workflow(
         "ci.yml",
@@ -929,6 +965,20 @@ fn checker_rejects_ci_push_path_filters() {
 }
 
 #[test]
+fn checker_rejects_extra_ci_trigger() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  pull_request:\n",
+        "  pull_request:\n  workflow_dispatch:\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "workflow.on must contain exactly `push` and `pull_request`",
+    );
+}
+
+#[test]
 fn checker_rejects_filtered_pull_request_trigger() {
     let workflow = replace_in_workflow(
         "ci.yml",
@@ -981,6 +1031,20 @@ fn checker_rejects_restricted_workflow_dispatch() {
     assert_security_rejected(
         &workflow,
         "workflow.on.workflow_dispatch must be null or an empty mapping",
+    );
+}
+
+#[test]
+fn checker_rejects_extra_security_trigger() {
+    let workflow = replace_in_workflow(
+        "security.yml",
+        "  workflow_dispatch:\n",
+        "  workflow_dispatch:\n  push:\n",
+    );
+
+    assert_security_rejected(
+        &workflow,
+        "workflow.on must contain exactly `schedule` and `workflow_dispatch`",
     );
 }
 

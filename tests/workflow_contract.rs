@@ -512,7 +512,7 @@ fn assert_ci_workflow(workflow: &str) {
 }
 
 fn replace_in_workflow(name: &str, from: &str, to: &str) -> String {
-    let workflow = read_workflow(name);
+    let workflow = read_workflow(name).replace("\r\n", "\n");
     assert!(
         workflow.contains(from),
         "test fixture source was not found in {name}: {from:?}"
@@ -535,6 +535,25 @@ fn assert_security_rejected(workflow: &str, expected_error: &str) {
         error.contains(expected_error),
         "unexpected security validation error: {error}"
     );
+}
+
+#[test]
+fn fixture_replacement_normalizes_crlf_before_matching_lf_snippets() {
+    let fixture_path = std::env::temp_dir().join(format!(
+        "arcwren-workflow-contract-{}.yml",
+        std::process::id()
+    ));
+    fs::write(&fixture_path, "steps:\r\n  - run: cargo test\r\n")
+        .expect("CRLF workflow fixture must be written");
+
+    let workflow = replace_in_workflow(
+        &fixture_path.to_string_lossy(),
+        "steps:\n  - run: cargo test\n",
+        "steps:\n  - run: cargo test --all-features\n",
+    );
+
+    fs::remove_file(&fixture_path).expect("CRLF workflow fixture must be removed");
+    assert_eq!(workflow, "steps:\n  - run: cargo test --all-features\n");
 }
 
 #[test]

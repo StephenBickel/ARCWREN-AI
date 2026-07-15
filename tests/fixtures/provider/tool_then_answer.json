@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "capabilities": {
+    "streaming": true,
+    "structured_tool_calls": true,
+    "parallel_tool_calls": false,
+    "usage_reporting": true,
+    "context_window": 128000
+  },
+  "responses": [
+    {
+      "events": [
+        {
+          "type": "tool_call",
+          "tool_call_id": "11111111-1111-4111-8111-111111111111",
+          "name": "fs.read",
+          "arguments": {
+            "path": "README.md"
+          }
+        },
+        {
+          "type": "usage",
+          "input_tokens": 48,
+          "output_tokens": 9
+        },
+        {
+          "type": "finish",
+          "reason": "tool_calls"
+        }
+      ]
+    },
+    {
+      "events": [
+        {
+          "type": "text_delta",
+          "text": "The file says "
+        },
+        {
+          "type": "text_delta",
+          "text": "# ArcWren"
+        },
+        {
+          "type": "usage",
+          "input_tokens": 71,
+          "output_tokens": 14
+        },
+        {
+          "type": "finish",
+          "reason": "stop"
+        }
+      ]
+    }
+  ]
+}

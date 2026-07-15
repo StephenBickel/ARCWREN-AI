@@ -1,0 +1,17 @@
+/target/
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Operating systems
+.DS_Store
+Thumbs.db

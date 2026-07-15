@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fs, path::PathBuf};
 use serde_yaml_ng::{Mapping, Value};
 
 const CHECKOUT_ACTION: &str = "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683";
+const CHECKOUT_TAG: &str = "v4.2.2";
 
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -101,6 +102,17 @@ fn validate_common(root: &Mapping, workflow: &str) -> Result<(), String> {
             .ok_or_else(|| "job names must be strings".to_owned())?;
         let context = format!("jobs.{job_name}");
         let job = value_map(job_value, &context)?;
+        if let Some(permissions) = job.get(Value::String("permissions".to_owned())) {
+            let permissions = value_map(permissions, &format!("{context}.permissions"))?;
+            for (permission, access) in permissions {
+                if access.as_str() == Some("write") {
+                    let permission = permission.as_str().unwrap_or("<non-string-permission>");
+                    return Err(format!(
+                        "{context}.permissions.{permission} must not grant write access"
+                    ));
+                }
+            }
+        }
         let timeout = field(job, "timeout-minutes", &context)?
             .as_u64()
             .ok_or_else(|| format!("{context}.timeout-minutes must be a positive integer"))?;
@@ -131,17 +143,15 @@ fn validate_common(root: &Mapping, workflow: &str) -> Result<(), String> {
     for (action, occurrence_count) in discovered_actions {
         let tagged_line_count = workflow
             .lines()
-            .filter(|line| action_line_has_tag_comment(line, &action))
+            .filter(|line| action_line_has_expected_tag_comment(line, &action))
             .count();
         if tagged_line_count != occurrence_count {
-            return Err(format!(
-                "every `{action}` use must have a human tag comment; found {tagged_line_count} comments for {occurrence_count} uses"
-            ));
+            return Err("checkout action uses must have the exact `# v4.2.2` comment".to_owned());
         }
     }
 
-    if value_contains_text(&Value::Mapping(root.clone()), "secrets.") {
-        return Err("workflow values must not reference repository secrets".to_owned());
+    if value_contains_secrets_context(&Value::Mapping(root.clone())) {
+        return Err("workflow values must not reference secrets context".to_owned());
     }
 
     Ok(())
@@ -169,7 +179,7 @@ fn validate_action_pin(action: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn action_line_has_tag_comment(line: &str, action: &str) -> bool {
+fn action_line_has_expected_tag_comment(line: &str, action: &str) -> bool {
     let line = line.trim_start();
     let Some(after_uses) = line
         .strip_prefix("- uses:")
@@ -180,22 +190,21 @@ fn action_line_has_tag_comment(line: &str, action: &str) -> bool {
     let Some((raw_action, comment)) = after_uses.split_once('#') else {
         return false;
     };
-    let tag = comment.trim();
-    raw_action.trim() == action
-        && tag
-            .strip_prefix('v')
-            .and_then(|version| version.chars().next())
-            .is_some_and(|character| character.is_ascii_digit())
+    raw_action.trim() == action && comment.trim() == CHECKOUT_TAG
 }
 
-fn value_contains_text(value: &Value, needle: &str) -> bool {
+fn value_contains_secrets_context(value: &Value) -> bool {
     match value {
-        Value::String(text) => text.contains(needle),
-        Value::Sequence(values) => values
-            .iter()
-            .any(|value| value_contains_text(value, needle)),
+        Value::String(text) => {
+            let compact: String = text
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect();
+            compact.contains("secrets.") || compact.contains("secrets[")
+        }
+        Value::Sequence(values) => values.iter().any(value_contains_secrets_context),
         Value::Mapping(mapping) => mapping.iter().any(|(key, value)| {
-            value_contains_text(key, needle) || value_contains_text(value, needle)
+            value_contains_secrets_context(key) || value_contains_secrets_context(value)
         }),
         _ => false,
     }
@@ -218,13 +227,38 @@ fn require_commands(
     context: &str,
     expected_commands: &[&str],
 ) -> Result<(), String> {
-    let commands = run_commands(job, context)?;
+    let steps = steps(job, context)?;
     for expected in expected_commands {
-        if !commands.contains(expected) {
+        let matching_steps: Vec<_> = steps
+            .iter()
+            .copied()
+            .filter(|step| {
+                step.get(Value::String("run".to_owned()))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    == Some(*expected)
+            })
+            .collect();
+        if matching_steps.is_empty() {
             return Err(format!(
                 "{context} is missing exact step run command `{expected}`"
             ));
         }
+        for step in matching_steps {
+            validate_required_gating(step, &format!("{context} required command `{expected}`"))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_required_gating(mapping: &Mapping, context: &str) -> Result<(), String> {
+    if mapping.contains_key(Value::String("if".to_owned())) {
+        return Err(format!("{context} must not define `if`"));
+    }
+    if let Some(continue_on_error) = mapping.get(Value::String("continue-on-error".to_owned()))
+        && continue_on_error.as_bool() != Some(false)
+    {
+        return Err(format!("{context} must not set `continue-on-error: true`"));
     }
     Ok(())
 }
@@ -235,11 +269,21 @@ fn validate_ci_workflow(workflow: &str) -> Result<(), String> {
     validate_common(root, workflow)?;
 
     let triggers = triggers(root)?;
-    require_trigger(triggers, "push")?;
+    let push = value_map(field(triggers, "push", "workflow.on")?, "workflow.on.push")?;
+    let push_branches = field(push, "branches", "workflow.on.push")?
+        .as_sequence()
+        .ok_or_else(|| "workflow.on.push.branches must be a sequence".to_owned())?;
+    if !push_branches
+        .iter()
+        .any(|branch| branch.as_str() == Some("main"))
+    {
+        return Err("workflow.on.push.branches must include `main`".to_owned());
+    }
     require_trigger(triggers, "pull_request")?;
 
     let jobs = value_map(field(root, "jobs", "workflow")?, "workflow.jobs")?;
     let quality = job(jobs, "quality")?;
+    validate_required_gating(quality, "jobs.quality")?;
     if string_field(quality, "name", "jobs.quality")? != "Quality" {
         return Err("jobs.quality.name must equal `Quality`".to_owned());
     }
@@ -258,6 +302,7 @@ fn validate_ci_workflow(workflow: &str) -> Result<(), String> {
     )?;
 
     let test = job(jobs, "test")?;
+    validate_required_gating(test, "jobs.test")?;
     if string_field(test, "name", "jobs.test")? != "Test (${{ matrix.os }})" {
         return Err("jobs.test.name must retain the stable matrix check name".to_owned());
     }
@@ -269,6 +314,14 @@ fn validate_ci_workflow(workflow: &str) -> Result<(), String> {
         field(strategy, "matrix", "jobs.test.strategy")?,
         "jobs.test.strategy.matrix",
     )?;
+    if let Some(exclude) = matrix.get(Value::String("exclude".to_owned())) {
+        let exclude = exclude.as_sequence().ok_or_else(|| {
+            "jobs.test.strategy.matrix.exclude must be absent or empty".to_owned()
+        })?;
+        if !exclude.is_empty() {
+            return Err("jobs.test.strategy.matrix.exclude must be absent or empty".to_owned());
+        }
+    }
     let operating_systems = field(matrix, "os", "jobs.test.strategy.matrix")?
         .as_sequence()
         .ok_or_else(|| "jobs.test.strategy.matrix.os must be a sequence".to_owned())?;
@@ -312,11 +365,26 @@ fn validate_security_workflow(workflow: &str) -> Result<(), String> {
     validate_common(root, workflow)?;
 
     let triggers = triggers(root)?;
-    require_trigger(triggers, "schedule")?;
+    let schedule = field(triggers, "schedule", "workflow.on")?
+        .as_sequence()
+        .ok_or_else(|| {
+            "workflow.on.schedule must contain a valid five-field cron entry".to_owned()
+        })?;
+    let has_valid_cron = schedule.iter().any(|entry| {
+        entry
+            .as_mapping()
+            .and_then(|entry| entry.get(Value::String("cron".to_owned())))
+            .and_then(Value::as_str)
+            .is_some_and(|cron| cron.split_whitespace().count() == 5)
+    });
+    if !has_valid_cron {
+        return Err("workflow.on.schedule must contain a valid five-field cron entry".to_owned());
+    }
     require_trigger(triggers, "workflow_dispatch")?;
 
     let jobs = value_map(field(root, "jobs", "workflow")?, "workflow.jobs")?;
     let security = job(jobs, "security")?;
+    validate_required_gating(security, "jobs.security")?;
     if string_field(security, "runs-on", "jobs.security")? != "ubuntu-latest" {
         return Err("jobs.security.runs-on must equal `ubuntu-latest`".to_owned());
     }
@@ -329,6 +397,32 @@ fn validate_security_workflow(workflow: &str) -> Result<(), String> {
 
 fn assert_ci_workflow(workflow: &str) {
     validate_ci_workflow(workflow).unwrap_or_else(|error| panic!("{error}"));
+}
+
+fn replace_in_workflow(name: &str, from: &str, to: &str) -> String {
+    let workflow = read_workflow(name);
+    assert!(
+        workflow.contains(from),
+        "test fixture source was not found in {name}: {from:?}"
+    );
+    workflow.replacen(from, to, 1)
+}
+
+fn assert_ci_rejected(workflow: &str, expected_error: &str) {
+    let error = validate_ci_workflow(workflow).expect_err("CI workflow must be rejected");
+    assert!(
+        error.contains(expected_error),
+        "unexpected CI validation error: {error}"
+    );
+}
+
+fn assert_security_rejected(workflow: &str, expected_error: &str) {
+    let error =
+        validate_security_workflow(workflow).expect_err("security workflow must be rejected");
+    assert!(
+        error.contains(expected_error),
+        "unexpected security validation error: {error}"
+    );
 }
 
 #[test]
@@ -417,6 +511,136 @@ jobs:
     assert!(
         error.contains("jobs.decoy is missing `timeout-minutes`"),
         "unexpected structural validation error: {error}"
+    );
+}
+
+#[test]
+fn checker_rejects_if_on_a_required_job() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  quality:\n    name: Quality\n",
+        "  quality:\n    name: Quality\n    if: ${{ false }}\n",
+    );
+
+    assert_ci_rejected(&workflow, "jobs.quality must not define `if`");
+}
+
+#[test]
+fn checker_rejects_continue_on_error_on_a_required_job() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  quality:\n    name: Quality\n",
+        "  quality:\n    name: Quality\n    continue-on-error: true\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "jobs.quality must not set `continue-on-error: true`",
+    );
+}
+
+#[test]
+fn checker_rejects_if_on_a_required_command_step() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "      - name: Check formatting\n        run: cargo fmt --check\n",
+        "      - name: Check formatting\n        if: ${{ false }}\n        run: cargo fmt --check\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "required command `cargo fmt --check` must not define `if`",
+    );
+}
+
+#[test]
+fn checker_rejects_continue_on_error_on_a_required_command_step() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "      - name: Check formatting\n        run: cargo fmt --check\n",
+        "      - name: Check formatting\n        continue-on-error: true\n        run: cargo fmt --check\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "required command `cargo fmt --check` must not set `continue-on-error: true`",
+    );
+}
+
+#[test]
+fn checker_rejects_matrix_exclusions_that_remove_required_operating_systems() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "      matrix:\n        os: [ubuntu-latest, macos-latest, windows-latest]\n",
+        "      matrix:\n        os: [ubuntu-latest, macos-latest, windows-latest]\n        exclude:\n          - os: ubuntu-latest\n          - os: macos-latest\n          - os: windows-latest\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "jobs.test.strategy.matrix.exclude must be absent or empty",
+    );
+}
+
+#[test]
+fn checker_rejects_job_level_write_permissions() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  quality:\n    name: Quality\n",
+        "  quality:\n    name: Quality\n    permissions:\n      contents: write\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "jobs.quality.permissions.contents must not grant write access",
+    );
+}
+
+#[test]
+fn checker_rejects_indexed_secret_context_with_whitespace() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "      - name: Check formatting\n        run: cargo fmt --check\n",
+        "      - name: Check formatting\n        env:\n          TOKEN: ${{ secrets [ 'TOKEN' ] }}\n        run: cargo fmt --check\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "workflow values must not reference secrets context",
+    );
+}
+
+#[test]
+fn checker_rejects_empty_security_schedule() {
+    let workflow = replace_in_workflow(
+        "security.yml",
+        "  schedule:\n    - cron: \"17 6 * * 1\"\n",
+        "  schedule: []\n",
+    );
+
+    assert_security_rejected(
+        &workflow,
+        "workflow.on.schedule must contain a valid five-field cron entry",
+    );
+}
+
+#[test]
+fn checker_rejects_ci_push_without_main_branch() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  push:\n    branches: [main]\n",
+        "  push:\n    branches: [develop]\n",
+    );
+
+    assert_ci_rejected(&workflow, "workflow.on.push.branches must include `main`");
+}
+
+#[test]
+fn checker_rejects_misleading_checkout_tag_comment() {
+    let workflow = replace_in_workflow("ci.yml", "# v4.2.2", "# v9.9.9");
+
+    assert_ci_rejected(
+        &workflow,
+        "checkout action uses must have the exact `# v4.2.2` comment",
     );
 }
 

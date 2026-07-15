@@ -9,7 +9,7 @@ The intended v1 experience is one continuous session across a local terminal UI 
 ## Status: pre-alpha foundation
 
 > [!WARNING]
-> ArcWren is currently a **pre-alpha foundation** and is not yet a usable end-user agent. Only the CLI help shell is usable. The HTTP/OpenAI adapters, runtime tool loop, built-in tools, TUI interaction, and Telegram gateway are not implemented. Command names shown by help reserve the planned interface; invoking them returns a not-implemented error.
+> ArcWren is currently a **pre-alpha foundation** and is not yet a usable end-user agent. Only the CLI help shell is usable. The HTTP/OpenAI adapters, runtime tool loop, built-in tools, TUI interaction, and Telegram gateway are not implemented. Command names shown by help reserve the planned interface. Only the five placeholder commands `serve`, `auth`, `pair`, `doctor`, and `sessions` return not-implemented errors; Clap's built-in `help` command displays help.
 
 The repository is being developed in public so the storage, event, provider, and policy boundaries can be reviewed before consequential tool execution exists.
 

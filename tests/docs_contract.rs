@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use arcwren::cli::Cli;
-use clap::CommandFactory;
+use clap::{CommandFactory, Parser, error::ErrorKind};
 
 const PUBLIC_DOCS: &[&str] = &[
     "README.md",
@@ -77,39 +77,66 @@ fn readme_local_links_resolve_to_files() {
 #[test]
 fn fenced_arcwren_commands_match_the_clap_command_tree() {
     let readme = read_readme();
+    validate_fenced_arcwren_commands(&readme).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+fn fenced_arcwren_command_checker_rejects_unknown_option_only_invocations() {
+    let markdown = "```sh\narcwren --bogus\n```";
+
+    let error = validate_fenced_arcwren_commands(markdown)
+        .expect_err("the docs checker must reject an unknown root option");
+
+    assert!(error.contains("--bogus"));
+}
+
+fn validate_fenced_arcwren_commands(markdown: &str) -> Result<(), String> {
     let mut command = Cli::command();
     let clap_commands: BTreeSet<_> = command
         .get_subcommands()
         .map(|subcommand| subcommand.get_name().to_owned())
         .collect();
     let help = command.render_long_help().to_string();
-    let documented_commands = fenced_arcwren_commands(&readme);
+    let documented_commands = fenced_arcwren_commands(markdown);
 
-    assert!(
-        !documented_commands.is_empty(),
-        "README must include at least one fenced arcwren command"
-    );
+    if documented_commands.is_empty() {
+        return Err("README must include at least one fenced arcwren command".to_owned());
+    }
 
     for documented in documented_commands {
-        let mut arguments = documented.split_whitespace();
-        assert_eq!(arguments.next(), Some("arcwren"));
+        let arguments: Vec<_> = documented.split_whitespace().collect();
+        if arguments.first() != Some(&"arcwren") {
+            return Err(format!(
+                "fenced command does not begin with `arcwren`: `{documented}`"
+            ));
+        }
 
-        let Some(name) = arguments
-            .next()
-            .filter(|argument| !argument.starts_with('-'))
-        else {
-            continue;
-        };
+        match Cli::try_parse_from(arguments.iter().copied()) {
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::DisplayHelp => {}
+            Err(error) => {
+                return Err(format!(
+                    "README documents invalid arcwren invocation `{documented}`: {error}"
+                ));
+            }
+        }
 
-        assert!(
-            clap_commands.contains(name),
-            "README documents unknown arcwren command `{name}` in `{documented}`"
-        );
-        assert!(
-            help.contains(name),
-            "arcwren --help does not expose documented command `{name}`"
-        );
+        let documented_top_level = arguments
+            .iter()
+            .skip(1)
+            .find_map(|argument| clap_commands.get(*argument));
+        if let Some(name) = documented_top_level
+            && !help
+                .lines()
+                .any(|line| line.split_whitespace().next() == Some(name.as_str()))
+        {
+            return Err(format!(
+                "arcwren --help does not expose documented command `{name}`"
+            ));
+        }
     }
+
+    Ok(())
 }
 
 #[test]
@@ -132,6 +159,9 @@ fn readme_states_the_current_status_and_security_boundaries() {
         "runtime tool loop",
         "tui interaction",
         "telegram gateway",
+        "only the five placeholder commands",
+        "`serve`, `auth`, `pair`, `doctor`, and `sessions` return not-implemented errors",
+        "clap's built-in `help` command displays help",
     ] {
         assert!(
             normalized.contains(required_statement),

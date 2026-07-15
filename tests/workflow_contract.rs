@@ -67,6 +67,8 @@ fn run_commands<'a>(job: &'a Mapping, context: &str) -> Result<Vec<&'a str>, Str
 }
 
 fn validate_common(root: &Mapping, workflow: &str) -> Result<(), String> {
+    reject_keys(root, "workflow", &["defaults"])?;
+
     let permissions = value_map(
         field(root, "permissions", "workflow")?,
         "workflow.permissions",
@@ -214,12 +216,13 @@ fn triggers(root: &Mapping) -> Result<&Mapping, String> {
     value_map(field(root, "on", "workflow")?, "workflow.on")
 }
 
-fn require_trigger(triggers: &Mapping, name: &str) -> Result<(), String> {
-    if triggers.contains_key(Value::String(name.to_owned())) {
-        Ok(())
-    } else {
-        Err(format!("workflow.on is missing `{name}`"))
+fn reject_keys(mapping: &Mapping, context: &str, rejected_keys: &[&str]) -> Result<(), String> {
+    for key in rejected_keys {
+        if mapping.contains_key(Value::String((*key).to_owned())) {
+            return Err(format!("{context} must not define `{key}`"));
+        }
     }
+    Ok(())
 }
 
 fn require_commands(
@@ -245,9 +248,35 @@ fn require_commands(
             ));
         }
         for step in matching_steps {
-            validate_required_gating(step, &format!("{context} required command `{expected}`"))?;
+            validate_required_step(step, &format!("{context} required command `{expected}`"))?;
         }
     }
+    Ok(())
+}
+
+fn validate_required_job(mapping: &Mapping, context: &str) -> Result<(), String> {
+    reject_keys(
+        mapping,
+        context,
+        &["needs", "defaults", "env", "container", "services"],
+    )?;
+    validate_required_gating(mapping, context)
+}
+
+fn validate_required_job_steps(mapping: &Mapping, context: &str) -> Result<(), String> {
+    for (index, step) in steps(mapping, context)?.into_iter().enumerate() {
+        validate_step_execution_overrides(step, &format!("{context}.steps[{index}]"))?;
+    }
+    Ok(())
+}
+
+fn validate_required_step(mapping: &Mapping, context: &str) -> Result<(), String> {
+    validate_step_execution_overrides(mapping, context)?;
+    validate_required_gating(mapping, context)
+}
+
+fn validate_step_execution_overrides(mapping: &Mapping, context: &str) -> Result<(), String> {
+    reject_keys(mapping, context, &["env", "shell", "working-directory"])?;
     Ok(())
 }
 
@@ -263,6 +292,31 @@ fn validate_required_gating(mapping: &Mapping, context: &str) -> Result<(), Stri
     Ok(())
 }
 
+fn validate_command_owners(
+    jobs: &Mapping,
+    required_commands: &[(&str, &str)],
+) -> Result<(), String> {
+    for (job_name, job_value) in jobs {
+        let job_name = job_name
+            .as_str()
+            .ok_or_else(|| "job names must be strings".to_owned())?;
+        let job = value_map(job_value, &format!("jobs.{job_name}"))?;
+        let commands = run_commands(job, &format!("jobs.{job_name}"))?;
+        for (required_command, required_owner) in required_commands {
+            if job_name != *required_owner && commands.contains(required_command) {
+                return Err(format!(
+                    "required command `{required_command}` must appear only in jobs.{required_owner}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn trigger_is_unrestricted(trigger: &Value) -> bool {
+    trigger.is_null() || trigger.as_mapping().is_some_and(Mapping::is_empty)
+}
+
 fn validate_ci_workflow(workflow: &str) -> Result<(), String> {
     let document = parse_workflow(workflow)?;
     let root = value_map(&document, "workflow")?;
@@ -273,17 +327,33 @@ fn validate_ci_workflow(workflow: &str) -> Result<(), String> {
     let push_branches = field(push, "branches", "workflow.on.push")?
         .as_sequence()
         .ok_or_else(|| "workflow.on.push.branches must be a sequence".to_owned())?;
-    if !push_branches
-        .iter()
-        .any(|branch| branch.as_str() == Some("main"))
-    {
+    if push_branches.len() == 1 && push_branches[0].as_str() != Some("main") {
         return Err("workflow.on.push.branches must include `main`".to_owned());
     }
-    require_trigger(triggers, "pull_request")?;
+    if push.len() != 1 || push_branches.len() != 1 || push_branches[0].as_str() != Some("main") {
+        return Err("workflow.on.push must contain only branches: [main]".to_owned());
+    }
+    let pull_request = field(triggers, "pull_request", "workflow.on")?;
+    if !trigger_is_unrestricted(pull_request) {
+        return Err("workflow.on.pull_request must be null or an empty mapping".to_owned());
+    }
 
     let jobs = value_map(field(root, "jobs", "workflow")?, "workflow.jobs")?;
+    validate_command_owners(
+        jobs,
+        &[
+            ("cargo fmt --check", "quality"),
+            (
+                "cargo clippy --all-targets --all-features -- -D warnings",
+                "quality",
+            ),
+            ("cargo test --doc", "quality"),
+            ("cargo deny check", "quality"),
+            ("cargo test --all-features", "test"),
+        ],
+    )?;
     let quality = job(jobs, "quality")?;
-    validate_required_gating(quality, "jobs.quality")?;
+    validate_required_job(quality, "jobs.quality")?;
     if string_field(quality, "name", "jobs.quality")? != "Quality" {
         return Err("jobs.quality.name must equal `Quality`".to_owned());
     }
@@ -300,9 +370,10 @@ fn validate_ci_workflow(workflow: &str) -> Result<(), String> {
             "cargo deny check",
         ],
     )?;
+    validate_required_job_steps(quality, "jobs.quality")?;
 
     let test = job(jobs, "test")?;
-    validate_required_gating(test, "jobs.test")?;
+    validate_required_job(test, "jobs.test")?;
     if string_field(test, "name", "jobs.test")? != "Test (${{ matrix.os }})" {
         return Err("jobs.test.name must retain the stable matrix check name".to_owned());
     }
@@ -336,6 +407,7 @@ fn validate_ci_workflow(workflow: &str) -> Result<(), String> {
         }
     }
     require_commands(test, "jobs.test", &["cargo test --all-features"])?;
+    validate_required_job_steps(test, "jobs.test")?;
 
     let all_feature_test_count = jobs
         .iter()
@@ -370,21 +442,35 @@ fn validate_security_workflow(workflow: &str) -> Result<(), String> {
         .ok_or_else(|| {
             "workflow.on.schedule must contain a valid five-field cron entry".to_owned()
         })?;
-    let has_valid_cron = schedule.iter().any(|entry| {
-        entry
-            .as_mapping()
-            .and_then(|entry| entry.get(Value::String("cron".to_owned())))
-            .and_then(Value::as_str)
-            .is_some_and(|cron| cron.split_whitespace().count() == 5)
-    });
-    if !has_valid_cron {
+    if schedule.is_empty() {
         return Err("workflow.on.schedule must contain a valid five-field cron entry".to_owned());
     }
-    require_trigger(triggers, "workflow_dispatch")?;
+    let exact_schedule = schedule.len() == 1
+        && schedule[0].as_mapping().is_some_and(|entry| {
+            entry.len() == 1
+                && entry
+                    .get(Value::String("cron".to_owned()))
+                    .and_then(Value::as_str)
+                    == Some("17 6 * * 1")
+        });
+    if !exact_schedule {
+        return Err("workflow.on.schedule must equal cron `17 6 * * 1`".to_owned());
+    }
+    let workflow_dispatch = field(triggers, "workflow_dispatch", "workflow.on")?;
+    if !trigger_is_unrestricted(workflow_dispatch) {
+        return Err("workflow.on.workflow_dispatch must be null or an empty mapping".to_owned());
+    }
 
     let jobs = value_map(field(root, "jobs", "workflow")?, "workflow.jobs")?;
+    validate_command_owners(
+        jobs,
+        &[
+            ("cargo audit", "security"),
+            ("cargo deny check", "security"),
+        ],
+    )?;
     let security = job(jobs, "security")?;
-    validate_required_gating(security, "jobs.security")?;
+    validate_required_job(security, "jobs.security")?;
     if string_field(security, "runs-on", "jobs.security")? != "ubuntu-latest" {
         return Err("jobs.security.runs-on must equal `ubuntu-latest`".to_owned());
     }
@@ -392,7 +478,8 @@ fn validate_security_workflow(workflow: &str) -> Result<(), String> {
         security,
         "jobs.security",
         &["cargo audit", "cargo deny check"],
-    )
+    )?;
+    validate_required_job_steps(security, "jobs.security")
 }
 
 fn assert_ci_workflow(workflow: &str) {
@@ -641,6 +728,259 @@ fn checker_rejects_misleading_checkout_tag_comment() {
     assert_ci_rejected(
         &workflow,
         "checkout action uses must have the exact `# v4.2.2` comment",
+    );
+}
+
+#[test]
+fn checker_rejects_needs_on_quality_job() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  quality:\n    name: Quality\n",
+        "  quality:\n    name: Quality\n    needs: bootstrap\n",
+    );
+
+    assert_ci_rejected(&workflow, "jobs.quality must not define `needs`");
+}
+
+#[test]
+fn checker_rejects_needs_on_test_job() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  test:\n    name: Test (${{ matrix.os }})\n",
+        "  test:\n    name: Test (${{ matrix.os }})\n    needs: quality\n",
+    );
+
+    assert_ci_rejected(&workflow, "jobs.test must not define `needs`");
+}
+
+#[test]
+fn checker_rejects_needs_on_security_job() {
+    let workflow = replace_in_workflow(
+        "security.yml",
+        "  security:\n    name: Security\n",
+        "  security:\n    name: Security\n    needs: bootstrap\n",
+    );
+
+    assert_security_rejected(&workflow, "jobs.security must not define `needs`");
+}
+
+#[test]
+fn checker_rejects_workflow_run_defaults() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "name: CI\n\n",
+        "name: CI\n\ndefaults:\n  run:\n    shell: bash\n\n",
+    );
+
+    assert_ci_rejected(&workflow, "workflow must not define `defaults`");
+}
+
+#[test]
+fn checker_rejects_job_run_defaults() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  quality:\n    name: Quality\n",
+        "  quality:\n    name: Quality\n    defaults:\n      run:\n        shell: bash\n",
+    );
+
+    assert_ci_rejected(&workflow, "jobs.quality must not define `defaults`");
+}
+
+#[test]
+fn checker_rejects_path_env_on_required_job() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  quality:\n    name: Quality\n",
+        "  quality:\n    name: Quality\n    env:\n      PATH: /tmp/untrusted\n",
+    );
+
+    assert_ci_rejected(&workflow, "jobs.quality must not define `env`");
+}
+
+#[test]
+fn checker_rejects_path_env_on_required_command_step() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "      - name: Check formatting\n        run: cargo fmt --check\n",
+        "      - name: Check formatting\n        env:\n          PATH: /tmp/untrusted\n        run: cargo fmt --check\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "required command `cargo fmt --check` must not define `env`",
+    );
+}
+
+#[test]
+fn checker_rejects_path_env_on_any_step_in_required_job() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "      - name: Install cargo-deny\n        run: cargo install cargo-deny --locked --version 0.20.2\n",
+        "      - name: Install cargo-deny\n        env:\n          PATH: /tmp/untrusted\n        run: cargo install cargo-deny --locked --version 0.20.2\n",
+    );
+
+    assert_ci_rejected(&workflow, "jobs.quality.steps[4] must not define `env`");
+}
+
+#[test]
+fn checker_rejects_container_on_required_job() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  quality:\n    name: Quality\n",
+        "  quality:\n    name: Quality\n    container: ubuntu:latest\n",
+    );
+
+    assert_ci_rejected(&workflow, "jobs.quality must not define `container`");
+}
+
+#[test]
+fn checker_rejects_services_on_required_job() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  quality:\n    name: Quality\n",
+        "  quality:\n    name: Quality\n    services:\n      redis:\n        image: redis:latest\n",
+    );
+
+    assert_ci_rejected(&workflow, "jobs.quality must not define `services`");
+}
+
+#[test]
+fn checker_rejects_custom_shell_on_required_command_step() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "      - name: Check formatting\n        run: cargo fmt --check\n",
+        "      - name: Check formatting\n        shell: bash\n        run: cargo fmt --check\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "required command `cargo fmt --check` must not define `shell`",
+    );
+}
+
+#[test]
+fn checker_rejects_working_directory_on_required_command_step() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "      - name: Check formatting\n        run: cargo fmt --check\n",
+        "      - name: Check formatting\n        working-directory: nested\n        run: cargo fmt --check\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "required command `cargo fmt --check` must not define `working-directory`",
+    );
+}
+
+#[test]
+fn checker_rejects_required_command_in_nonrequired_job() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "\n  test:\n",
+        "\n  shadow:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - run: cargo fmt --check\n\n  test:\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "required command `cargo fmt --check` must appear only in jobs.quality",
+    );
+}
+
+#[test]
+fn checker_rejects_additional_ci_push_branch_pattern() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "    branches: [main]\n",
+        "    branches: [main, release]\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "workflow.on.push must contain only branches: [main]",
+    );
+}
+
+#[test]
+fn checker_rejects_negative_ci_push_branch_pattern() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "    branches: [main]\n",
+        "    branches: [main, \"!legacy\"]\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "workflow.on.push must contain only branches: [main]",
+    );
+}
+
+#[test]
+fn checker_rejects_ci_push_path_filters() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "    branches: [main]\n",
+        "    branches: [main]\n    paths: [\"src/**\"]\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "workflow.on.push must contain only branches: [main]",
+    );
+}
+
+#[test]
+fn checker_rejects_filtered_pull_request_trigger() {
+    let workflow = replace_in_workflow(
+        "ci.yml",
+        "  pull_request:\n",
+        "  pull_request:\n    paths: [\"src/**\"]\n",
+    );
+
+    assert_ci_rejected(
+        &workflow,
+        "workflow.on.pull_request must be null or an empty mapping",
+    );
+}
+
+#[test]
+fn checker_rejects_impossible_security_cron() {
+    let workflow = replace_in_workflow(
+        "security.yml",
+        "    - cron: \"17 6 * * 1\"\n",
+        "    - cron: \"61 25 31 2 *\"\n",
+    );
+
+    assert_security_rejected(
+        &workflow,
+        "workflow.on.schedule must equal cron `17 6 * * 1`",
+    );
+}
+
+#[test]
+fn checker_rejects_additional_security_schedule() {
+    let workflow = replace_in_workflow(
+        "security.yml",
+        "    - cron: \"17 6 * * 1\"\n",
+        "    - cron: \"17 6 * * 1\"\n    - cron: \"0 0 * * *\"\n",
+    );
+
+    assert_security_rejected(
+        &workflow,
+        "workflow.on.schedule must equal cron `17 6 * * 1`",
+    );
+}
+
+#[test]
+fn checker_rejects_restricted_workflow_dispatch() {
+    let workflow = replace_in_workflow(
+        "security.yml",
+        "  workflow_dispatch:\n",
+        "  workflow_dispatch:\n    inputs:\n      environment:\n        required: true\n",
+    );
+
+    assert_security_rejected(
+        &workflow,
+        "workflow.on.workflow_dispatch must be null or an empty mapping",
     );
 }
 

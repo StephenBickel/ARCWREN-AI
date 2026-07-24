@@ -52,9 +52,15 @@ Carl uses a dedicated, provider-owned Codex sidecar:
   device-code login and reports only login status, plan type, and rate limits;
 - stable `codex mcp-server` exposes Codex as a policy-routed delegated tool inside
   Carl's native loop;
-- every Codex process receives a Carl-specific `CODEX_HOME`;
+- every Codex process receives a Carl-specific `CODEX_HOME`, which isolates
+  filesystem-backed configuration and state;
 - Codex stores and refreshes its own tokens in the operating-system keyring;
 - Carl never reads, receives, copies, logs, or forwards a Codex bearer or refresh token.
+
+OpenAI does not document the OS-keyring entry as namespaced by `CODEX_HOME`; its login
+cache may be shared with other Codex surfaces for the same OS user. Carl therefore
+does not claim keyring isolation, and its logout UI must warn that logging out can
+affect another Codex CLI or IDE session.
 
 The delegated tool runs against a content-scanned staging copy, never the live
 workspace, and returns bounded exact-replacement proposals for existing text files.
@@ -72,7 +78,9 @@ Carl uses the official Grok Build process boundary:
   through Agent Client Protocol (ACP) as a policy-routed delegated tool inside Carl's
   native loop;
 - every Grok process receives a Carl-specific `GROK_HOME`;
-- Grok owns token storage and refresh;
+- Grok owns token storage and refresh in its provider-managed
+  `$GROK_HOME/auth.json`; Carl creates the home owner-only and requires the provider
+  credential file to remain a regular, non-linked owner-only file without reading it;
 - Carl consumes typed ACP events and never reads or forwards OAuth tokens;
 - the Grok delegate runs against the same kind of content-scanned staging copy and can
   only return inert exact-replacement proposals.
@@ -83,8 +91,10 @@ CLI, OpenCode, or Kilo client identity.
 
 ### Shared invariants
 
-- Sidecars run as local child processes over stdio only in V1.
+- Carl's sidecar control protocols run as local child processes over stdio only in V1.
 - Carl never exposes provider control protocols on a network listener.
+- Codex browser login may create its own short-lived loopback OAuth callback listener;
+  device-code login remains available when a callback listener is unsuitable.
 - Executable discovery, version checks, installation, and upgrades are explicit.
 - Carl never silently installs or updates a provider executable.
 - Each adapter pins a tested protocol/version range and fails closed on incompatible

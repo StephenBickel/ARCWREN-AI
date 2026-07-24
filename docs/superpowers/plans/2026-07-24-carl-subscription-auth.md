@@ -17,7 +17,10 @@ current-test-executable sidecar fixtures.
 - Never receive, parse, log, serialize, or forward provider access/refresh tokens.
 - Never copy Codex, Grok CLI, OpenCode, or Kilo OAuth client identities.
 - Set a dedicated `CODEX_HOME` or `GROK_HOME` for every sidecar process.
-- Use local child-process stdio only. No network listener is allowed.
+- Use local child-process stdio for Carl's control protocols. Carl never opens a
+  sidecar control listener. Codex's provider-owned browser ceremony may open its
+  documented short-lived loopback OAuth callback; offer device code when that is
+  unsuitable.
 - Do not silently download, install, or update provider executables.
 - Pin and test supported provider executable/protocol versions; fail closed outside the supported range.
 - Keep every standard test offline by substituting deterministic fake sidecar executables.
@@ -276,18 +279,35 @@ git commit -m "feat: supervise isolated provider sidecars"
 
 The adapter must:
 
-1. spawn `codex app-server --listen stdio://` with Carl's `CODEX_HOME`;
-2. send `initialize`, then `initialized`;
-3. call `account/read`;
-4. start `type: "chatgpt"` browser login or `type: "chatgptDeviceCode"`;
-5. surface only `authUrl`, or `verificationUrl` plus `userCode`;
-6. wait for `account/login/completed` and `account/updated`;
-7. expose auth method and plan type while discarding email and account identifiers;
-8. support `account/logout` and login cancellation.
+1. accept exactly `codex-cli 0.136.0` from a bounded `codex --version` probe;
+2. spawn
+   `codex app-server --strict-config -c 'cli_auth_credentials_store="keyring"' --listen stdio://`
+   with Carl's `CODEX_HOME` and cwd set to that isolated home;
+3. send the headerless JSON-RPC `initialize` request, validate the returned
+   `codexHome` equals the isolated home without logging either path, then send
+   `initialized` with no parameters;
+4. call `account/read` with `refreshToken: false`;
+5. start `type: "chatgpt"` browser login or `type: "chatgptDeviceCode"`;
+6. retain `loginId` only in a private non-serializable redacted wrapper and surface
+   only `authUrl`, or `verificationUrl` plus `userCode`;
+7. treat only `account/login/completed` with the exact non-null pending `loginId` as
+   terminal, then confirm the result with `account/read`;
+8. treat `account/updated` as advisory cache invalidation because it has no
+   `loginId`, and never use it to complete a login;
+9. report a confirmed ChatGPT session with `AuthMethod::ProviderManaged` plus the
+   closed mapped plan type, while immediately discarding email and account
+   identifiers; browser/device describes the current ceremony, not durable state;
+10. support `account/logout` and `account/login/cancel`, reconciling a cancel
+    `notFound` race through buffered completion plus `account/read`.
 
 Test success, rejection, timeout, cancellation, incompatible handshake, malformed
-notifications, duplicate terminal notifications, and child exit. Assert fixture
-sentinels resembling bearer tokens never appear in Carl events or errors.
+notifications, wrong/mixed response IDs, duplicate terminal notifications, advisory
+notification reorderings, cancel/completion races, and child exit. Assert fixture
+sentinels resembling bearer tokens never appear in Carl events or errors. Pin
+headerless JSON-RPC and the exact 0.136.0 plan spellings in fixtures; widen the
+supported version only after schema-conformance tests are added for another release.
+`SignedIn` means authenticated, not that an eligible/usable entitlement has been
+proven.
 
 ### Step 2: Implement keyring-only isolated auth
 
@@ -297,8 +317,16 @@ Before login, write provider-owned config beneath Carl's isolated `CODEX_HOME`:
 cli_auth_credentials_store = "keyring"
 ```
 
-Fail with an actionable unavailable state if Codex reports that the keyring cannot be
-used. Do not fall back to plaintext auth storage.
+Use owner-only permissions and repeat the setting through the higher-precedence
+command-line override shown above. Do not use `auto` or `file`, inspect `auth.json`, or
+call a broad config-read endpoint. Codex 0.136.0 exposes no structured
+keyring-unavailable error; map opaque provider failures to a static
+`ProviderRejected` result rather than matching or exposing provider text.
+
+`CODEX_HOME` isolates filesystem configuration, but OpenAI does not document OS-keyring
+entries as namespaced by that path. Do not claim credential/keyring isolation. Warn
+that `carl auth logout openai` can affect another Codex CLI or IDE session for the same
+OS user. Never fall back to plaintext auth storage.
 
 ### Step 3: Verify and commit
 
@@ -317,12 +345,15 @@ git commit -m "feat: add isolated ChatGPT subscription login"
 
 - Create: `src/auth/grok.rs`
 - Modify: `src/auth/mod.rs`
+- Modify: `tests/auth_contract.rs`
 - Create: `tests/grok_auth_contract.rs`
 - Extend: `tests/support/sidecar.rs`
 
 ### Step 1: Write failing login tests
 
-Carl invokes provider-owned commands using its isolated `GROK_HOME`:
+Accept exactly the tested `grok 0.2.111` release from a bounded, strict
+`grok --no-auto-update version` probe. Carl invokes provider-owned commands using its
+isolated `GROK_HOME`:
 
 ```text
 grok --no-auto-update login
@@ -330,9 +361,16 @@ grok --no-auto-update login --device-auth
 grok --no-auto-update logout
 ```
 
-The login process owns OAuth and token storage. Carl may surface bounded human-facing
-URL/code/status lines but never parse or persist token-shaped values. Test success,
-decline, timeout, cancellation, and redaction with a fake binary.
+The login process owns OAuth and token storage. Official Grok Build documentation
+provides no JSON or stable machine-output contract for `login`; it may open a browser
+and emits human/ANSI terminal text. Carl must therefore run login only as an explicit
+foreground command with the provider process attached directly to the user's terminal.
+Carl does not capture, parse, redact, relay, serialize, or persist its login output.
+Add a fieldless, non-serializable `LoginChallenge::ProviderManaged` result to represent
+this terminal-owned ceremony. Reject login when no foreground terminal can be attached;
+Telegram and other remote channels may query status but cannot initiate Grok login in
+V1. Test success, decline, timeout, cancellation, terminal absence, and process cleanup
+with a fake binary.
 
 Use `grok --no-auto-update agent stdio` only to perform a local
 `initialize`/auth-method/status handshake against the isolated `GROK_HOME`; do not
@@ -344,16 +382,29 @@ failures map to a typed unavailable state.
 
 Test:
 
-- `initialize` declares no host filesystem or terminal capabilities;
+- JSON-RPC 2.0 `initialize` uses `protocolVersion: 1`, declares no host filesystem or
+  terminal capabilities, and sends `_meta: {"headless": true}` where the pinned
+  protocol requires it;
 - auth-method parsing followed by a successful `cached_token` authenticate request;
 - `cached_token` advertised but rejected, expired, or malformed;
 - cancellation and child cleanup;
-- exact `--no-auto-update` argv for browser login, device login, logout, status, and
+- exact `--no-auto-update` argv for version, browser login, device login, logout,
+  status, and
   every later delegate process.
 
-The status probe runs with cwd set to the isolated provider home, not the user's
-workspace. Reject direct provider tokens, custom OAuth client IDs, and custom inference
-base URLs in subscription mode.
+Every Grok process runs with `GROK_HOME`, generic `HOME`/profile variables, and cwd set
+to the isolated provider home, not the user's workspace. Clear the parent environment
+and reject direct provider tokens, custom OAuth client IDs, and custom inference base
+URLs in subscription mode. Do not claim this suppresses machine-wide `/etc/grok`
+enterprise policy.
+
+Grok Build stores provider-managed bearer credentials in `$GROK_HOME/auth.json`, not a
+documented OS keychain. Carl must never open or deserialize that file. After successful
+login, inspect metadata only: require a regular, non-symlink/non-reparse, single-link
+file with owner-only permissions (`0600` on Unix and a non-broad DACL on Windows) under
+the owner-only provider home. If this check fails, invoke provider-owned logout and
+fail closed. Status means authenticated only; it does not prove subscription
+eligibility or model entitlement.
 
 Commit:
 

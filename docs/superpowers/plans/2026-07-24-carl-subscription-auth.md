@@ -18,9 +18,8 @@ current-test-executable sidecar fixtures.
 - Never copy Codex, Grok CLI, OpenCode, or Kilo OAuth client identities.
 - Set a dedicated `CODEX_HOME` or `GROK_HOME` for every sidecar process.
 - Use local child-process stdio for Carl's control protocols. Carl never opens a
-  sidecar control listener. Codex's provider-owned browser ceremony may open its
-  documented short-lived loopback OAuth callback; offer device code when that is
-  unsuitable.
+  sidecar control listener. A provider-owned browser ceremony may open its own
+  short-lived loopback OAuth callback; offer device code when that is unsuitable.
 - Do not silently download, install, or update provider executables.
 - Pin and test supported provider executable/protocol versions; fail closed outside the supported range.
 - Keep every standard test offline by substituting deterministic fake sidecar executables.
@@ -160,9 +159,16 @@ git commit -m "feat: add subscription auth contracts"
 Define:
 
 ```rust
+pub enum VersionOutputFormat {
+    ExactPrefix(&'static str),
+    SingleSemverToken,
+}
+
 pub struct SidecarCommand {
     pub executable: PathBuf,
     pub arguments: Vec<OsString>,
+    pub version_arguments: Vec<OsString>,
+    pub version_output: VersionOutputFormat,
     pub home_variable: &'static str,
     pub isolated_home: PathBuf,
     pub supported_versions: VersionReq,
@@ -174,7 +180,12 @@ pub struct JsonlSidecar { /* private child and pipes */ }
 Test:
 
 - executable discovery returns a typed unavailable state;
-- `--version` is parsed and rejected outside the pinned range;
+- the configured/discovered executable is canonicalized once to a regular file,
+  rejected when platform metadata proves the target is broadly writable, and the same
+  canonical path is reused for version and sidecar execution;
+- exact provider-specific version argv is honored (Codex uses `--version`; Grok uses
+  `--no-auto-update version`), bounded output is parsed with a provider-specific
+  closed format, and versions outside the pinned range are rejected;
 - the supervisor creates an absolute provider home under Carl's data directory with
   owner-only permissions and rejects symlinks or locations inside the workspace;
 - the child receives only an allowlisted environment plus its provider-home variable;
@@ -256,6 +267,11 @@ are not an owner-only ACL. Reject symlinks and Windows reparse points, including
 junctions. Keep creation capability-relative where the platform APIs allow it and
 document the remaining trusted-data-root assumption rather than claiming a portable
 race-free path CAS.
+
+Version compatibility is not publisher attestation. Surface the canonical executable
+path in the foreground doctor/config UI, require explicit trust for nonstandard paths,
+and do not imply that a matching version string proves an executable came from the
+provider.
 
 Commit:
 
@@ -351,14 +367,17 @@ git commit -m "feat: add isolated ChatGPT subscription login"
 
 ### Step 1: Write failing login tests
 
-Accept exactly the tested `grok 0.2.111` release from a bounded, strict
-`grok --no-auto-update version` probe. Carl invokes provider-owned commands using its
-isolated `GROK_HOME`:
+Accept exactly the tested `grok 0.2.111` release from a bounded
+`grok --no-auto-update version` probe. The documented output format is not stable, so
+require exactly one semver token, reject prereleases/multiple versions/malformed or
+oversized output, and cross-check any ACP `agentInfo.version`. Carl invokes
+provider-owned commands using its isolated `GROK_HOME`:
 
 ```text
 grok --no-auto-update login
 grok --no-auto-update login --device-auth
 grok --no-auto-update logout
+grok --no-auto-update agent stdio
 ```
 
 The login process owns OAuth and token storage. Official Grok Build documentation
@@ -373,30 +392,41 @@ V1. Test success, decline, timeout, cancellation, terminal absence, and process 
 with a fake binary.
 
 Use `grok --no-auto-update agent stdio` only to perform a local
-`initialize`/auth-method/status handshake against the isolated `GROK_HOME`; do not
-create a session or send a prompt. Advertising `cached_token` means only that the
-method is supported. Carl must call `authenticate` with `methodId: "cached_token"` and
-report signed in only when that request succeeds. Absence of the method, a rejected or
-expired cached token, or an authentication-required response means signed out; protocol
-failures map to a typed unavailable state.
+`initialize`/authenticate handshake against the isolated `GROK_HOME`; ACP has no
+status method. Do not send `initialized`, create a session, or send a prompt.
+Advertising `cached_token` means only that the method is supported. Carl must call
+`authenticate` with:
+
+```json
+{"methodId":"cached_token","_meta":{"headless":true}}
+```
+
+Report signed in only when that request returns an empty success result. Absence of
+the method or JSON-RPC authentication-required error `-32000` means signed out;
+malformed/duplicate methods, wrong IDs or protocol versions, mixed result/error,
+unsupported requests, and protocol errors fail closed as `ProtocolMismatch`. Other
+well-formed provider failures map to `ProviderRejected` without inspecting message
+text.
 
 Test:
 
-- JSON-RPC 2.0 `initialize` uses `protocolVersion: 1`, declares no host filesystem or
-  terminal capabilities, and sends `_meta: {"headless": true}` where the pinned
-  protocol requires it;
+- newline-delimited JSON-RPC 2.0 `initialize` uses `protocolVersion: 1` and declares
+  both filesystem read/write and terminal capabilities as `false`;
 - auth-method parsing followed by a successful `cached_token` authenticate request;
 - `cached_token` advertised but rejected, expired, or malformed;
+- no `session/*`, prompt, filesystem, or terminal request is ever sent;
 - cancellation and child cleanup;
 - exact `--no-auto-update` argv for version, browser login, device login, logout,
   status, and
   every later delegate process.
 
-Every Grok process runs with `GROK_HOME`, generic `HOME`/profile variables, and cwd set
-to the isolated provider home, not the user's workspace. Clear the parent environment
-and reject direct provider tokens, custom OAuth client IDs, and custom inference base
-URLs in subscription mode. Do not claim this suppresses machine-wide `/etc/grok`
-enterprise policy.
+Every Grok process runs with `GROK_HOME`, a synthetic generic `HOME`/`USERPROFILE`, and
+cwd set to the isolated provider home, not the user's workspace. Set
+`GROK_DISABLE_AUTOUPDATER=1` in addition to the argv flag. Clear the parent environment,
+do not inherit `BROWSER`, and reject parent provider tokens, OAuth overrides, and
+custom inference base URLs in subscription mode. Root-owned `/etc/grok` enterprise
+policy is an explicitly trusted administrator boundary and may still be discovered;
+Carl does not claim `GROK_HOME` suppresses it or parse `grok inspect --json`.
 
 Grok Build stores provider-managed bearer credentials in `$GROK_HOME/auth.json`, not a
 documented OS keychain. Carl must never open or deserialize that file. After successful
@@ -404,7 +434,16 @@ login, inspect metadata only: require a regular, non-symlink/non-reparse, single
 file with owner-only permissions (`0600` on Unix and a non-broad DACL on Windows) under
 the owner-only provider home. If this check fails, invoke provider-owned logout and
 fail closed. Status means authenticated only; it does not prove subscription
-eligibility or model entitlement.
+eligibility or model entitlement, so return `AuthMethod::ProviderManaged` and
+`plan: None`. Serialize login, logout, and ACP status probes because status may refresh
+the provider credential file. After both login and logout, run the ACP probe and trust
+that result rather than CLI exit status or human text.
+
+Canonicalize the configured executable and reuse that exact regular file for version,
+login, logout, and ACP. Reject writable/untrusted targets where the platform can
+establish that fact, but document that version matching alone is compatibility
+checking, not publisher attestation. Updating beyond 0.2.111 requires an explicit Carl
+compatibility release; Carl never runs Grok's updater.
 
 Commit:
 

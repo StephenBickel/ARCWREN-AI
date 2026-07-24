@@ -93,8 +93,9 @@ CLI, OpenCode, or Kilo client identity.
 
 - Carl's sidecar control protocols run as local child processes over stdio only in V1.
 - Carl never exposes provider control protocols on a network listener.
-- Codex browser login may create its own short-lived loopback OAuth callback listener;
-  device-code login remains available when a callback listener is unsuitable.
+- A provider-owned browser login may create its own short-lived loopback OAuth
+  callback listener; device-code login remains available when a callback listener is
+  unsuitable.
 - Executable discovery, version checks, installation, and upgrades are explicit.
 - Carl never silently installs or updates a provider executable.
 - Each adapter pins a tested protocol/version range and fails closed on incompatible

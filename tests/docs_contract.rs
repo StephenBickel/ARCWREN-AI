@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
-use arcwren::cli::Cli;
+use carl::cli::Cli;
 use clap::{CommandFactory, Parser, error::ErrorKind};
 
 const PUBLIC_DOCS: &[&str] = &[

@@ -1,9 +1,9 @@
 use std::error::Error;
 
-use arcwren::error::ErrorCode;
-use arcwren::events::ToolCallId;
-use arcwren::providers::scripted::ScriptedProvider;
-use arcwren::providers::{
+use carl::error::ErrorCode;
+use carl::events::ToolCallId;
+use carl::providers::scripted::ScriptedProvider;
+use carl::providers::{
     FinishReason, Message, MessageContent, ModelRequest, ModelSettings, Provider,
     ProviderCapabilities, ProviderError, ProviderEvent, Role, ToolDefinition,
 };

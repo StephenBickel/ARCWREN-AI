@@ -71,27 +71,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arcwren"
-version = "0.1.0"
-dependencies = [
- "assert_cmd",
- "chrono",
- "clap",
- "futures-core",
- "futures-util",
- "predicates",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha2",
- "thiserror",
- "tokio",
- "tokio-util",
- "uuid",
-]
-
-[[package]]
 name = "assert_cmd"
 version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -149,6 +128,27 @@ name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+
+[[package]]
+name = "carl-agent"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "chrono",
+ "clap",
+ "futures-core",
+ "futures-util",
+ "predicates",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
 
 [[package]]
 name = "cc"

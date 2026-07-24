@@ -539,10 +539,8 @@ fn assert_security_rejected(workflow: &str, expected_error: &str) {
 
 #[test]
 fn fixture_replacement_normalizes_crlf_before_matching_lf_snippets() {
-    let fixture_path = std::env::temp_dir().join(format!(
-        "arcwren-workflow-contract-{}.yml",
-        std::process::id()
-    ));
+    let fixture_path =
+        std::env::temp_dir().join(format!("carl-workflow-contract-{}.yml", std::process::id()));
     fs::write(&fixture_path, "steps:\r\n  - run: cargo test\r\n")
         .expect("CRLF workflow fixture must be written");
 

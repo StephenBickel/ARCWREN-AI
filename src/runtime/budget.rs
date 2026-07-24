@@ -1,4 +1,4 @@
-use crate::error::{ArcWrenError, BudgetResource};
+use crate::error::{BudgetResource, CarlError};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TurnBudget {
@@ -48,7 +48,7 @@ impl BudgetTracker {
         self.tool_calls
     }
 
-    pub fn try_record_iteration(&mut self) -> Result<(), ArcWrenError> {
+    pub fn try_record_iteration(&mut self) -> Result<(), CarlError> {
         Self::try_increment(
             &mut self.iterations,
             self.budget.max_iterations,
@@ -56,7 +56,7 @@ impl BudgetTracker {
         )
     }
 
-    pub fn try_record_tool_call(&mut self) -> Result<(), ArcWrenError> {
+    pub fn try_record_tool_call(&mut self) -> Result<(), CarlError> {
         Self::try_increment(
             &mut self.tool_calls,
             self.budget.max_tool_calls,
@@ -68,14 +68,14 @@ impl BudgetTracker {
         current: &mut u32,
         limit: u32,
         resource: BudgetResource,
-    ) -> Result<(), ArcWrenError> {
+    ) -> Result<(), CarlError> {
         if *current >= limit {
-            return Err(ArcWrenError::BudgetExceeded { resource, limit });
+            return Err(CarlError::BudgetExceeded { resource, limit });
         }
 
         *current = current
             .checked_add(1)
-            .ok_or(ArcWrenError::BudgetExceeded { resource, limit })?;
+            .ok_or(CarlError::BudgetExceeded { resource, limit })?;
         Ok(())
     }
 }

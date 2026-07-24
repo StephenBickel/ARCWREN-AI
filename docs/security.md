@@ -1,12 +1,12 @@
 # Security Model
 
-Status: design plus partial foundation. ArcWren is not currently a usable agent, and the controls described as planned below are not enforcement claims.
+Status: design plus partial foundation. Carl is not currently a usable agent, and the controls described as planned below are not enforcement claims.
 
 ## Trust model
 
 The local owner and host operating system define the trust root. Model output, tool arguments, remote messages, provider responses, fetched content, repository files, and skill instructions are untrusted inputs. The SQLite database, exported traces, and logs may contain sensitive conversation or filesystem metadata even after credential redaction.
 
-ArcWren does not attempt to defend a host account from an attacker who already controls that account or its operating system. It also does not promise perfect containment of arbitrary native commands.
+Carl does not attempt to defend a host account from an attacker who already controls that account or its operating system. It also does not promise perfect containment of arbitrary native commands.
 
 ## Implemented properties
 
@@ -41,7 +41,7 @@ Every one of these controls requires implementation and adversarial tests before
 
 The target design stores secret references in configuration and values in the operating system credential store, with environment variables supported for automation. Environment credentials must not be copied into configuration, events, logs, diagnostics, fixtures, or exported traces.
 
-OpenAI access will use an OpenAI Platform API key. ArcWren will not reuse Codex or ChatGPT credentials and will not call undocumented OAuth endpoints. See [ADR 0003](adr/0003-no-undocumented-oauth.md).
+OpenAI access will use an OpenAI Platform API key. Carl will not reuse Codex or ChatGPT credentials and will not call undocumented OAuth endpoints. See [ADR 0003](adr/0003-no-undocumented-oauth.md).
 
 ## Remote channel boundary
 

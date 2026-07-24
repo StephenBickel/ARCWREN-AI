@@ -1,6 +1,6 @@
-use arcwren::error::ArcWrenError;
-use arcwren::events::{ApprovalId, Event, EventId, SessionId, ToolCallId};
-use arcwren::storage::{ApprovalStatus, MemoryState, Store};
+use carl::error::CarlError;
+use carl::events::{ApprovalId, Event, EventId, SessionId, ToolCallId};
+use carl::storage::{ApprovalStatus, MemoryState, Store};
 use rusqlite::{Connection, params};
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -14,7 +14,7 @@ struct TemporaryDatabase {
 
 impl TemporaryDatabase {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("arcwren-storage-{}.sqlite", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("carl-storage-{}.sqlite", Uuid::new_v4()));
         Self { path }
     }
 
@@ -99,7 +99,7 @@ fn store_open_rejects_a_database_that_cannot_enable_wal() {
     let error = open_error(":memory:");
     assert!(matches!(
         error,
-        ArcWrenError::Storage { ref detail }
+        CarlError::Storage { ref detail }
             if detail.contains("journal mode") && detail.contains("memory")
     ));
 }
@@ -121,7 +121,7 @@ fn store_open_rejects_a_future_database_migration() -> Result<(), Box<dyn Error>
     let error = open_error(database.path());
     assert!(matches!(
         error,
-        ArcWrenError::Storage { ref detail }
+        CarlError::Storage { ref detail }
             if detail.contains("unsupported database migration version 2")
     ));
     Ok(())
@@ -143,7 +143,7 @@ fn store_open_rejects_a_tampered_migration_checksum() -> Result<(), Box<dyn Erro
     let error = open_error(database.path());
     assert!(matches!(
         error,
-        ArcWrenError::Storage { ref detail }
+        CarlError::Storage { ref detail }
             if detail.contains("migration 1 checksum mismatch")
     ));
     Ok(())
@@ -317,7 +317,7 @@ fn failed_event_insert_rolls_back_the_allocated_sequence() -> Result<(), Box<dyn
             },
         )
         .unwrap_err();
-    assert!(matches!(error, ArcWrenError::Storage { .. }));
+    assert!(matches!(error, CarlError::Storage { .. }));
     connection.execute_batch("DROP TRIGGER reject_event_insert;")?;
 
     let accepted = store.append(
@@ -343,7 +343,7 @@ fn reading_rejects_a_future_event_schema_as_a_typed_storage_error() -> Result<()
     let error = store.read_events(session.id).unwrap_err();
     assert!(matches!(
         error,
-        ArcWrenError::Storage { ref detail }
+        CarlError::Storage { ref detail }
             if detail.contains("unsupported event schema version 2")
     ));
 
@@ -380,7 +380,7 @@ fn ensure_checksum_column(connection: &Connection) -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-fn open_error(path: impl AsRef<Path>) -> ArcWrenError {
+fn open_error(path: impl AsRef<Path>) -> CarlError {
     match Store::open(path) {
         Ok(_) => panic!("Store::open unexpectedly accepted an incompatible database"),
         Err(error) => error,

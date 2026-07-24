@@ -1,10 +1,10 @@
 # Architecture
 
-Status: pre-alpha foundation. The [approved v1 design](superpowers/specs/2026-07-13-arcwren-v1-design.md) defines the target; this document separates current code from that target.
+Status: pre-alpha foundation. The [approved Carl design](superpowers/specs/2026-07-23-carl-top-tier-harness-design.md) defines the target; this document separates current code from that target.
 
 ## System shape
 
-ArcWren is designed as one Rust package with a library and one executable. Frontends create and consume provider-neutral events; they do not call model providers or tools directly.
+Carl is designed as one Rust package with a library and one executable. Frontends create and consume provider-neutral events; they do not call model providers or tools directly.
 
 ```text
 TUI (planned) --------+
@@ -36,7 +36,7 @@ Partially executed tools will not be resumed automatically after a crash: repeat
 
 ## Ownership and process model
 
-V1 permits one ArcWren process to own a data directory at a time. The interactive process and future headless `serve` mode are alternate owners, not concurrent daemons. This reduces locking, approval, cancellation, and credential-lifetime ambiguity while the public interfaces stabilize. See [ADR 0002](adr/0002-single-process-v1.md).
+V1 permits one Carl process to own a data directory at a time. The interactive process and future headless `serve` mode are alternate owners, not concurrent daemons. This reduces locking, approval, cancellation, and credential-lifetime ambiguity while the public interfaces stabilize. See [ADR 0002](adr/0002-single-process-v1.md).
 
 ## Stable boundaries, unstable details
 

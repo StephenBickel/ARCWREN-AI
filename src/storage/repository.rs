@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::error::ArcWrenError;
+use crate::error::CarlError;
 use crate::events::{
     ApprovalId, EVENT_SCHEMA_VERSION, Event, EventEnvelope, EventId, SessionId, ToolCallId, TurnId,
 };
@@ -41,7 +41,7 @@ impl ApprovalStatus {
         }
     }
 
-    fn parse(value: &str) -> Result<Self, ArcWrenError> {
+    fn parse(value: &str) -> Result<Self, CarlError> {
         match value {
             "pending" => Ok(Self::Pending),
             "allowed" => Ok(Self::Allowed),
@@ -78,7 +78,7 @@ impl MemoryState {
         }
     }
 
-    fn parse(value: &str) -> Result<Self, ArcWrenError> {
+    fn parse(value: &str) -> Result<Self, CarlError> {
         match value {
             "active" => Ok(Self::Active),
             "forgotten" => Ok(Self::Forgotten),
@@ -102,7 +102,7 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, ArcWrenError> {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, CarlError> {
         let mut connection = Connection::open(path).map_err(storage_error)?;
         connection
             .busy_timeout(BUSY_TIMEOUT)
@@ -116,7 +116,7 @@ impl Store {
             })
             .map_err(storage_error)?;
         if !journal_mode.eq_ignore_ascii_case("wal") {
-            return Err(ArcWrenError::Storage {
+            return Err(CarlError::Storage {
                 detail: format!(
                     "SQLite journal mode is {journal_mode:?}; WAL is required for durable storage"
                 ),
@@ -127,29 +127,29 @@ impl Store {
         Ok(Self { connection })
     }
 
-    pub fn journal_mode(&self) -> Result<String, ArcWrenError> {
+    pub fn journal_mode(&self) -> Result<String, CarlError> {
         self.connection
             .pragma_query_value(None, "journal_mode", |row| row.get(0))
             .map_err(storage_error)
     }
 
-    pub fn foreign_keys_enabled(&self) -> Result<bool, ArcWrenError> {
+    pub fn foreign_keys_enabled(&self) -> Result<bool, CarlError> {
         self.connection
             .pragma_query_value(None, "foreign_keys", |row| row.get::<_, bool>(0))
             .map_err(storage_error)
     }
 
-    pub fn busy_timeout_millis(&self) -> Result<u64, ArcWrenError> {
+    pub fn busy_timeout_millis(&self) -> Result<u64, CarlError> {
         let timeout = self
             .connection
             .pragma_query_value(None, "busy_timeout", |row| row.get::<_, i64>(0))
             .map_err(storage_error)?;
-        u64::try_from(timeout).map_err(|error| ArcWrenError::Storage {
+        u64::try_from(timeout).map_err(|error| CarlError::Storage {
             detail: format!("invalid busy timeout {timeout}: {error}"),
         })
     }
 
-    pub fn create_session(&self) -> Result<SessionRecord, ArcWrenError> {
+    pub fn create_session(&self) -> Result<SessionRecord, CarlError> {
         let now = Utc::now();
         let session = SessionRecord {
             id: SessionId::new(),
@@ -166,7 +166,7 @@ impl Store {
         Ok(session)
     }
 
-    pub fn list_sessions(&self) -> Result<Vec<SessionRecord>, ArcWrenError> {
+    pub fn list_sessions(&self) -> Result<Vec<SessionRecord>, CarlError> {
         let mut statement = self
             .connection
             .prepare(
@@ -203,7 +203,7 @@ impl Store {
         session_id: SessionId,
         turn_id: Option<TurnId>,
         event: Event,
-    ) -> Result<EventEnvelope, ArcWrenError> {
+    ) -> Result<EventEnvelope, CarlError> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -219,10 +219,10 @@ impl Store {
             )
             .optional()
             .map_err(storage_error)?
-            .ok_or_else(|| ArcWrenError::Storage {
+            .ok_or_else(|| CarlError::Storage {
                 detail: format!("session {session_id} does not exist"),
             })?;
-        let sequence = u64::try_from(sequence).map_err(|error| ArcWrenError::Storage {
+        let sequence = u64::try_from(sequence).map_err(|error| CarlError::Storage {
             detail: format!("invalid event sequence {sequence}: {error}"),
         })?;
         let envelope = EventEnvelope {
@@ -244,7 +244,7 @@ impl Store {
                     envelope.id.to_string(),
                     envelope.session_id.to_string(),
                     envelope.turn_id.map(|id| id.to_string()),
-                    i64::try_from(envelope.sequence).map_err(|error| ArcWrenError::Storage {
+                    i64::try_from(envelope.sequence).map_err(|error| CarlError::Storage {
                         detail: format!("event sequence is too large: {error}"),
                     })?,
                     format_timestamp(envelope.timestamp),
@@ -258,7 +258,7 @@ impl Store {
         Ok(envelope)
     }
 
-    pub fn read_events(&self, session_id: SessionId) -> Result<Vec<EventEnvelope>, ArcWrenError> {
+    pub fn read_events(&self, session_id: SessionId) -> Result<Vec<EventEnvelope>, CarlError> {
         let mut statement = self
             .connection
             .prepare(
@@ -294,7 +294,7 @@ impl Store {
         id: ApprovalId,
         tool_call_id: ToolCallId,
         summary: impl Into<String>,
-    ) -> Result<ApprovalRecord, ArcWrenError> {
+    ) -> Result<ApprovalRecord, CarlError> {
         let approval = ApprovalRecord {
             id,
             session_id,
@@ -322,7 +322,7 @@ impl Store {
         Ok(approval)
     }
 
-    pub fn get_approval(&self, id: ApprovalId) -> Result<Option<ApprovalRecord>, ArcWrenError> {
+    pub fn get_approval(&self, id: ApprovalId) -> Result<Option<ApprovalRecord>, CarlError> {
         let row = self
             .connection
             .query_row(
@@ -364,9 +364,9 @@ impl Store {
         &self,
         id: ApprovalId,
         status: ApprovalStatus,
-    ) -> Result<ApprovalRecord, ArcWrenError> {
+    ) -> Result<ApprovalRecord, CarlError> {
         if status == ApprovalStatus::Pending {
-            return Err(ArcWrenError::Storage {
+            return Err(CarlError::Storage {
                 detail: "a pending approval must resolve to a terminal status".to_owned(),
             });
         }
@@ -384,11 +384,11 @@ impl Store {
             )
             .map_err(storage_error)?;
         if updated != 1 {
-            return Err(ArcWrenError::Storage {
+            return Err(CarlError::Storage {
                 detail: format!("approval {id} is missing or already resolved"),
             });
         }
-        self.get_approval(id)?.ok_or_else(|| ArcWrenError::Storage {
+        self.get_approval(id)?.ok_or_else(|| CarlError::Storage {
             detail: format!("approval {id} disappeared after resolution"),
         })
     }
@@ -397,7 +397,7 @@ impl Store {
         &self,
         content: impl Into<String>,
         provenance: impl Into<String>,
-    ) -> Result<MemoryRecord, ArcWrenError> {
+    ) -> Result<MemoryRecord, CarlError> {
         let memory = MemoryRecord {
             id: Uuid::new_v4(),
             content: content.into(),
@@ -423,7 +423,7 @@ impl Store {
         Ok(memory)
     }
 
-    pub fn list_active_memories(&self) -> Result<Vec<MemoryRecord>, ArcWrenError> {
+    pub fn list_active_memories(&self) -> Result<Vec<MemoryRecord>, CarlError> {
         let mut statement = self
             .connection
             .prepare(
@@ -441,7 +441,7 @@ impl Store {
         rows.into_iter().map(MemoryRecord::try_from).collect()
     }
 
-    pub fn get_memory(&self, id: Uuid) -> Result<Option<MemoryRecord>, ArcWrenError> {
+    pub fn get_memory(&self, id: Uuid) -> Result<Option<MemoryRecord>, CarlError> {
         self.connection
             .query_row(
                 "SELECT id, content, provenance, state, created_at, forgotten_at
@@ -456,7 +456,7 @@ impl Store {
             .transpose()
     }
 
-    pub fn forget_memory(&self, id: Uuid) -> Result<MemoryRecord, ArcWrenError> {
+    pub fn forget_memory(&self, id: Uuid) -> Result<MemoryRecord, CarlError> {
         let updated = self
             .connection
             .execute(
@@ -467,11 +467,11 @@ impl Store {
             )
             .map_err(storage_error)?;
         if updated != 1 {
-            return Err(ArcWrenError::Storage {
+            return Err(CarlError::Storage {
                 detail: format!("memory {id} is missing or already forgotten"),
             });
         }
-        self.get_memory(id)?.ok_or_else(|| ArcWrenError::Storage {
+        self.get_memory(id)?.ok_or_else(|| CarlError::Storage {
             detail: format!("memory {id} disappeared after being forgotten"),
         })
     }
@@ -487,13 +487,13 @@ struct RawEvent {
 }
 
 impl RawEvent {
-    fn into_envelope(self, session_id: SessionId) -> Result<EventEnvelope, ArcWrenError> {
+    fn into_envelope(self, session_id: SessionId) -> Result<EventEnvelope, CarlError> {
         if self.schema_version > i64::from(EVENT_SCHEMA_VERSION) {
-            return Err(ArcWrenError::Storage {
+            return Err(CarlError::Storage {
                 detail: format!("unsupported event schema version {}", self.schema_version),
             });
         }
-        let sequence = u64::try_from(self.sequence).map_err(|error| ArcWrenError::Storage {
+        let sequence = u64::try_from(self.sequence).map_err(|error| CarlError::Storage {
             detail: format!("invalid event sequence {}: {error}", self.sequence),
         })?;
         let event = serde_json::from_str(&self.event_json).map_err(storage_error)?;
@@ -522,7 +522,7 @@ struct RawMemory {
 }
 
 impl TryFrom<RawMemory> for MemoryRecord {
-    type Error = ArcWrenError;
+    type Error = CarlError;
 
     fn try_from(value: RawMemory) -> Result<Self, Self::Error> {
         Ok(Self {
@@ -555,30 +555,30 @@ fn format_timestamp(timestamp: DateTime<Utc>) -> String {
     timestamp.to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
 
-fn parse_timestamp(value: &str) -> Result<DateTime<Utc>, ArcWrenError> {
+fn parse_timestamp(value: &str) -> Result<DateTime<Utc>, CarlError> {
     DateTime::parse_from_rfc3339(value)
         .map(|timestamp| timestamp.with_timezone(&Utc))
         .map_err(storage_error)
 }
 
-fn parse_id<T>(kind: &str, value: &str) -> Result<T, ArcWrenError>
+fn parse_id<T>(kind: &str, value: &str) -> Result<T, CarlError>
 where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    value.parse().map_err(|error| ArcWrenError::Storage {
+    value.parse().map_err(|error| CarlError::Storage {
         detail: format!("invalid {kind} {value:?}: {error}"),
     })
 }
 
-fn invalid_stored_value(kind: &str, value: &str) -> ArcWrenError {
-    ArcWrenError::Storage {
+fn invalid_stored_value(kind: &str, value: &str) -> CarlError {
+    CarlError::Storage {
         detail: format!("invalid stored {kind} {value:?}"),
     }
 }
 
-fn storage_error(error: impl std::fmt::Display) -> ArcWrenError {
-    ArcWrenError::Storage {
+fn storage_error(error: impl std::fmt::Display) -> CarlError {
+    CarlError::Storage {
         detail: error.to_string(),
     }
 }

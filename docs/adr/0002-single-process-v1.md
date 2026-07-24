@@ -9,7 +9,7 @@ Concurrent terminal, gateway, and background processes sharing one data director
 
 ## Decision
 
-Permit exactly one ArcWren process to own a data directory at a time in v1. The future interactive TUI and headless `serve` mode are alternate entry points to the same runtime, not concurrent peers. External service managers may keep the headless process alive, but ArcWren will not install a system service automatically.
+Permit exactly one Carl process to own a data directory at a time in v1. The future interactive TUI and headless `serve` mode are alternate entry points to the same runtime, not concurrent peers. External service managers may keep the headless process alive, but Carl will not install a system service automatically.
 
 The SQLite store exists today; the process-level data-directory lock, TUI, and headless gateway remain to be implemented.
 

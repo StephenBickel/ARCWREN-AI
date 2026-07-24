@@ -72,8 +72,8 @@ impl fmt::Display for BudgetResource {
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
-pub enum ArcWrenError {
-    #[error("ArcWren's configuration is invalid.")]
+pub enum CarlError {
+    #[error("Carl's configuration is invalid.")]
     Configuration { detail: String },
     #[error("Authentication failed.")]
     Authentication { detail: String },
@@ -87,7 +87,7 @@ pub enum ArcWrenError {
     Validation { detail: String },
     #[error("The tool failed.")]
     Tool { detail: String },
-    #[error("ArcWren could not access its local data.")]
+    #[error("Carl could not access its local data.")]
     Storage { detail: String },
     #[error("The frontend connection failed.")]
     Channel { detail: String },
@@ -102,7 +102,7 @@ pub enum ArcWrenError {
     },
 }
 
-impl ArcWrenError {
+impl CarlError {
     #[must_use]
     pub const fn code(&self) -> ErrorCode {
         match self {
@@ -124,14 +124,14 @@ impl ArcWrenError {
     #[must_use]
     pub const fn user_message(&self) -> &'static str {
         match self {
-            Self::Configuration { .. } => "ArcWren's configuration is invalid.",
+            Self::Configuration { .. } => "Carl's configuration is invalid.",
             Self::Authentication { .. } => "Authentication failed.",
             Self::Provider { .. } => "The model provider request failed.",
             Self::RateLimit { .. } => "The model provider is temporarily rate limited.",
             Self::Policy { .. } => "The requested action is not allowed.",
             Self::Validation { .. } => "The request is invalid.",
             Self::Tool { .. } => "The tool failed.",
-            Self::Storage { .. } => "ArcWren could not access its local data.",
+            Self::Storage { .. } => "Carl could not access its local data.",
             Self::Channel { .. } => "The frontend connection failed.",
             Self::Timeout { .. } => "The operation timed out.",
             Self::Cancelled { .. } => "The operation was cancelled.",

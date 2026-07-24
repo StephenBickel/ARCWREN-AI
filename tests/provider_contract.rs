@@ -1,9 +1,9 @@
 use std::error::Error;
 
-use arcwren::error::ErrorCode;
-use arcwren::events::ToolCallId;
-use arcwren::providers::scripted::ScriptedProvider;
-use arcwren::providers::{
+use carl::error::ErrorCode;
+use carl::events::ToolCallId;
+use carl::providers::scripted::ScriptedProvider;
+use carl::providers::{
     FinishReason, Message, MessageContent, ModelRequest, ModelSettings, Provider,
     ProviderCapabilities, ProviderError, ProviderEvent, Role, ToolDefinition,
 };
@@ -14,6 +14,12 @@ use tokio_util::sync::CancellationToken;
 const TOOL_CALL_ID: &str = "11111111-1111-4111-8111-111111111111";
 const SECOND_TOOL_CALL_ID: &str = "22222222-2222-4222-8222-222222222222";
 const FIXTURE: &str = include_str!("fixtures/provider/tool_then_answer.json");
+
+#[test]
+fn scripted_fixture_uses_the_current_product_identity() {
+    assert!(FIXTURE.contains("# Carl"));
+    assert!(!FIXTURE.contains(&["Arc", "Wren"].concat()));
+}
 
 fn tool_call_id() -> ToolCallId {
     TOOL_CALL_ID.parse().expect("fixture tool-call ID is valid")
@@ -112,7 +118,7 @@ fn normalized_message_content_carries_tool_calls_and_results() -> Result<(), Box
             role: Role::Tool,
             content: vec![MessageContent::ToolResult {
                 tool_call_id: tool_call_id(),
-                output: json!({"text": "# ArcWren"}),
+                output: json!({"text": "# Carl"}),
             }],
         },
     ];
@@ -131,7 +137,7 @@ fn normalized_message_content_carries_tool_calls_and_results() -> Result<(), Box
             "content": [{
                 "type": "tool_result",
                 "tool_call_id": TOOL_CALL_ID,
-                "output": {"text": "# ArcWren"},
+                "output": {"text": "# Carl"},
             }],
         },
     ]);
@@ -280,7 +286,7 @@ async fn scripted_provider_replays_complete_responses_and_records_complete_reque
                 text: "The file says ".into(),
             },
             ProviderEvent::TextDelta {
-                text: "# ArcWren".into(),
+                text: "# Carl".into(),
             },
             ProviderEvent::Usage {
                 input_tokens: 71,

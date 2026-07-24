@@ -1,6 +1,6 @@
 use std::{error::Error, fmt};
 
-use arcwren::cli::{Cli, Command};
+use carl::cli::{Cli, Command};
 use clap::Parser;
 
 #[derive(Debug)]

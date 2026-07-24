@@ -1,8 +1,12 @@
 # Changelog
 
-All notable changes to ArcWren will be recorded here. The project is pre-alpha and has not made a supported release.
+All notable changes to Carl will be recorded here. The project is pre-alpha and has not made a supported release.
 
 ## Unreleased
+
+### Changed
+
+- Renamed the pre-alpha ArcWren foundation to Carl, with the package `carl-agent` and executable `carl`.
 
 ### Added
 

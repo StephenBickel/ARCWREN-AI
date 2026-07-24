@@ -1,6 +1,6 @@
-use arcwren::error::{ArcWrenError, BudgetResource, ErrorCode};
-use arcwren::events::{ApprovalId, Event, EventEnvelope, EventId, SessionId, ToolCallId, TurnId};
-use arcwren::runtime::budget::{BudgetTracker, TurnBudget};
+use carl::error::{BudgetResource, CarlError, ErrorCode};
+use carl::events::{ApprovalId, Event, EventEnvelope, EventId, SessionId, ToolCallId, TurnId};
+use carl::runtime::budget::{BudgetTracker, TurnBudget};
 use chrono::{TimeZone, Utc};
 use serde_json::{Value, json};
 
@@ -181,7 +181,7 @@ fn budget_tracker_rejects_counts_beyond_each_limit_without_incrementing() {
     assert_eq!(tracker.iterations(), 1);
     assert_eq!(
         tracker.try_record_iteration(),
-        Err(ArcWrenError::BudgetExceeded {
+        Err(CarlError::BudgetExceeded {
             resource: BudgetResource::Iterations,
             limit: 1,
         })
@@ -192,7 +192,7 @@ fn budget_tracker_rejects_counts_beyond_each_limit_without_incrementing() {
     assert_eq!(tracker.tool_calls(), 1);
     assert_eq!(
         tracker.try_record_tool_call(),
-        Err(ArcWrenError::BudgetExceeded {
+        Err(CarlError::BudgetExceeded {
             resource: BudgetResource::ToolCalls,
             limit: 1,
         })
@@ -206,14 +206,14 @@ fn zero_budget_rejects_the_first_iteration_and_tool_call() {
 
     assert_eq!(
         tracker.try_record_iteration(),
-        Err(ArcWrenError::BudgetExceeded {
+        Err(CarlError::BudgetExceeded {
             resource: BudgetResource::Iterations,
             limit: 0,
         })
     );
     assert_eq!(
         tracker.try_record_tool_call(),
-        Err(ArcWrenError::BudgetExceeded {
+        Err(CarlError::BudgetExceeded {
             resource: BudgetResource::ToolCalls,
             limit: 0,
         })
@@ -225,7 +225,7 @@ fn zero_budget_rejects_the_first_iteration_and_tool_call() {
 fn errors_expose_stable_codes_and_sanitized_user_messages() -> Result<(), Box<dyn std::error::Error>>
 {
     let secret = "provider response included sk-secret";
-    let error = ArcWrenError::Provider {
+    let error = CarlError::Provider {
         detail: secret.into(),
     };
 
@@ -234,7 +234,7 @@ fn errors_expose_stable_codes_and_sanitized_user_messages() -> Result<(), Box<dy
     assert_eq!(serde_json::to_value(error.code())?, "provider_error");
     assert!(!error.user_message().contains(secret));
     assert_eq!(
-        ArcWrenError::BudgetExceeded {
+        CarlError::BudgetExceeded {
             resource: BudgetResource::Iterations,
             limit: 3,
         }
@@ -274,7 +274,7 @@ fn every_error_code_has_a_stable_public_string() -> Result<(), Box<dyn std::erro
 #[test]
 fn error_display_does_not_expose_internal_detail() {
     let secret = "provider response included sk-secret";
-    let error = ArcWrenError::Provider {
+    let error = CarlError::Provider {
         detail: secret.into(),
     };
 
@@ -283,6 +283,6 @@ fn error_display_does_not_expose_internal_detail() {
     assert!(!rendered.contains(secret));
     assert!(matches!(
         error,
-        ArcWrenError::Provider { ref detail } if detail == secret
+        CarlError::Provider { ref detail } if detail == secret
     ));
 }

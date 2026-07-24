@@ -16,6 +16,7 @@ fn carl_binary_exposes_the_reserved_command_tree() {
     let mut command = assert_cmd::Command::cargo_bin("carl").unwrap();
     command.arg("--help").assert().success().stdout(
         predicates::str::contains("Usage: carl <COMMAND>")
+            .or(predicates::str::contains("Usage: carl.exe <COMMAND>"))
             .and(predicates::str::contains("serve"))
             .and(predicates::str::contains("auth"))
             .and(predicates::str::contains("pair"))

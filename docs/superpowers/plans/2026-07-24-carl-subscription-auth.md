@@ -307,9 +307,12 @@ The adapter must:
 6. retain `loginId` only in a private non-serializable redacted wrapper and surface
    only `authUrl`, or `verificationUrl` plus `userCode`;
 7. treat only `account/login/completed` with the exact non-null pending `loginId` as
-   terminal, then confirm the result with `account/read`;
-8. treat `account/updated` as advisory cache invalidation because it has no
-   `loginId`, and never use it to complete a login;
+   correlated ceremony completion, then confirm the result with bounded
+   `account/read` retries;
+8. account for Codex 0.136.0 emitting `account/login/completed` before its
+   `AuthManager` reload finishes: treat `account/updated` only as an advisory signal
+   to retry `account/read` sooner because it has no `loginId`, and never use it by
+   itself to complete a login;
 9. report a confirmed ChatGPT session with `AuthMethod::ProviderManaged` plus the
    closed mapped plan type, while immediately discarding email and account
    identifiers; browser/device describes the current ceremony, not durable state;
@@ -318,7 +321,8 @@ The adapter must:
 
 Test success, rejection, timeout, cancellation, incompatible handshake, malformed
 notifications, wrong/mixed response IDs, duplicate terminal notifications, advisory
-notification reorderings, cancel/completion races, and child exit. Assert fixture
+notification reorderings, stale-then-updated account reads, confirmation deadline
+expiry, cancel/completion races, and child exit. Assert fixture
 sentinels resembling bearer tokens never appear in Carl events or errors. Pin
 headerless JSON-RPC and the exact 0.136.0 plan spellings in fixtures; widen the
 supported version only after schema-conformance tests are added for another release.

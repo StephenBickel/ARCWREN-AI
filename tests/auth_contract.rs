@@ -38,6 +38,24 @@ const REFRESH_TOKEN: &str = "refresh-token-secret";
 const COOKIE: &str = "session_cookie=cookie-secret";
 const USER_CODE: &str = "CARL-WREN";
 const CREDENTIAL_PATH: &str = "/Users/stephen/.codex/auth.json";
+const CURRENT_CODEX_AUTHORIZATION_URL: &str = concat!(
+    "https://auth.openai.com/oauth/authorize?",
+    "client_id=codex-public-client",
+    "&state=oauth-state-secret",
+    "&response_type=code",
+    "&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback",
+    "&scope=openid%20profile%20email%20offline_access",
+    "&code_challenge=challenge-value",
+    "&code_challenge_method=S256",
+    "&nonce=nonce-value",
+    "&prompt=login",
+    "&audience=https%3A%2F%2Fapi.openai.com",
+    "&resource=https%3A%2F%2Fapi.openai.com",
+    "&id_token_add_organizations=true",
+    "&codex_cli_simplified_flow=true",
+    "&originator=codex_cli_rs",
+    "&allowed_workspace_id=workspace-id",
+);
 const SENTINELS: [&str; 7] = [
     ACCOUNT_EMAIL,
     OAUTH_QUERY,
@@ -246,6 +264,16 @@ fn domain_foreground_values_reject_unsafe_or_ambiguous_input() {
         "https://auth.example.test/login?SESSION_COOKIE=cookie-secret",
         "https://auth.example.test/login?state=bEaReR%20access-token-secret",
         "https://auth.example.test/login?state=%20Bearer+access-token-secret",
+        "https://auth.example.test/login?token=access-token-secret",
+        "https://auth.example.test/login?api_key=api-key-secret",
+        "https://auth.example.test/login?api%5Fkey=api-key-secret",
+        "https://auth.example.test/login?id_token_hint=id-token-secret",
+        "https://auth.example.test/login?client_secret=client-secret",
+        "https://auth.example.test/login?secret=secret-value",
+        "https://auth.example.test/login?credential=credential-value",
+        "https://auth.example.test/login?credentials=credential-value",
+        "https://auth.example.test/login?unknown_parameter=value",
+        "https://auth.example.test/login?utm_source=codex",
     ] {
         let error = AuthorizationUrl::parse(invalid).unwrap_err();
         assert_eq!(error.code(), AuthErrorCode::InvalidAuthorizationUrl);
@@ -279,6 +307,13 @@ fn domain_foreground_values_reject_unsafe_or_ambiguous_input() {
             .expect("human-readable provider code is accepted")
             .into_foreground_string(),
         "ABCD-1234"
+    );
+
+    assert_eq!(
+        AuthorizationUrl::parse(CURRENT_CODEX_AUTHORIZATION_URL)
+            .expect("the current non-secret Codex authorization parameters are supported")
+            .into_foreground_string(),
+        CURRENT_CODEX_AUTHORIZATION_URL
     );
 }
 

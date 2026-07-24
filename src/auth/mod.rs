@@ -11,6 +11,33 @@ const MAX_AUTHORIZATION_URL_BYTES: usize = 8_192;
 const MAX_USER_CODE_BYTES: usize = 128;
 const INVALID_AUTH_DATA: &str = "invalid subscription authentication data";
 
+// Positive allowlist for non-secret OAuth authorization/navigation parameters.
+//
+// The first group is the standard authorization request surface Carl needs. The final
+// four are emitted by the current Codex login server, including its conditional
+// `allowed_workspace_id` parameter:
+// https://github.com/openai/codex/blob/main/codex-rs/login/src/server.rs
+//
+// Keep this list exact. Token, API-key, secret, credential, login-hint, and arbitrary
+// navigation aliases must continue to fail closed.
+const ALLOWED_AUTHORIZATION_QUERY_KEYS: &[&str] = &[
+    "client_id",
+    "state",
+    "response_type",
+    "redirect_uri",
+    "scope",
+    "code_challenge",
+    "code_challenge_method",
+    "nonce",
+    "prompt",
+    "audience",
+    "resource",
+    "id_token_add_organizations",
+    "codex_cli_simplified_flow",
+    "originator",
+    "allowed_workspace_id",
+];
+
 pub type AuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AuthError>> + Send + 'a>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -142,7 +169,7 @@ impl AuthorizationUrl {
             || !url.username().is_empty()
             || url.password().is_some()
             || url.fragment().is_some()
-            || contains_credential_query(&url)
+            || contains_disallowed_authorization_query(&url)
         {
             return Err(AuthError::from_code(AuthErrorCode::InvalidAuthorizationUrl));
         }
@@ -156,27 +183,10 @@ impl AuthorizationUrl {
     }
 }
 
-fn contains_credential_query(url: &Url) -> bool {
-    url.query_pairs()
-        .any(|(key, value)| is_credential_query_key(&key) || starts_with_bearer_credential(&value))
-}
-
-fn is_credential_query_key(key: &str) -> bool {
-    [
-        "accesstoken",
-        "refreshtoken",
-        "idtoken",
-        "authorization",
-        "cookie",
-        "setcookie",
-        "sessioncookie",
-    ]
-    .iter()
-    .any(|expected| {
-        key.bytes()
-            .filter(|byte| !matches!(byte, b'-' | b'_'))
-            .map(|byte| byte.to_ascii_lowercase())
-            .eq(expected.bytes())
+fn contains_disallowed_authorization_query(url: &Url) -> bool {
+    url.query_pairs().any(|(key, value)| {
+        !ALLOWED_AUTHORIZATION_QUERY_KEYS.contains(&key.as_ref())
+            || starts_with_bearer_credential(&value)
     })
 }
 

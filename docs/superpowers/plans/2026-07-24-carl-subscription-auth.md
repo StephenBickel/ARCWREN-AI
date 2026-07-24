@@ -288,7 +288,9 @@ git commit -m "feat: supervise isolated provider sidecars"
 
 - Create: `src/auth/codex.rs`
 - Modify: `src/auth/mod.rs`
+- Modify: `src/sidecar/mod.rs`
 - Create: `tests/codex_auth_contract.rs`
+- Modify: `tests/sidecar_contract.rs`
 - Extend: `tests/support/sidecar.rs`
 
 ### Step 1: Write failing JSON-RPC login tests
@@ -322,6 +324,12 @@ The adapter must:
 10. support `account/logout` and `account/login/cancel`, reconciling a cancel
     `notFound` race through buffered completion plus `account/read`.
 
+Map only the exact 0.136.0 plan literals. In addition to the direct names, map
+`prolite` to `ProLite`, `edu` to `Education`,
+`self_serve_business_usage_based` to the Codex-defined team-like `Team`, and
+`enterprise_cbp_usage_based` to the Codex-defined business-like `Business`. Reject
+unrecognized literals rather than converting arbitrary strings to `Unknown`.
+
 Test success, rejection, timeout, cancellation, incompatible handshake, malformed
 notifications, wrong/mixed response IDs, duplicate terminal notifications, advisory
 notification reorderings, stale-then-updated account reads, confirmation deadline
@@ -350,6 +358,9 @@ Write this static configuration through the sidecar module's opaque provider-hom
 capability using no-follow/create-new-or-verified-replace semantics and platform
 owner-only permissions. Do not reopen the home through an unchecked ambient path or
 duplicate the Unix/Windows filesystem security logic inside the Codex adapter.
+Use the sidecar's bounded outbound-notification and nonblocking
+`try_next_notification` APIs for initialization and buffered race reconciliation;
+never reach into its private pipes.
 
 `CODEX_HOME` isolates filesystem configuration, but OpenAI does not document OS-keyring
 entries as namespaced by that path. Do not claim credential/keyring isolation. Warn
@@ -373,8 +384,10 @@ git commit -m "feat: add isolated ChatGPT subscription login"
 
 - Create: `src/auth/grok.rs`
 - Modify: `src/auth/mod.rs`
+- Modify: `src/sidecar/mod.rs`
 - Modify: `tests/auth_contract.rs`
 - Create: `tests/grok_auth_contract.rs`
+- Modify: `tests/sidecar_contract.rs`
 - Extend: `tests/support/sidecar.rs`
 
 ### Step 1: Write failing login tests

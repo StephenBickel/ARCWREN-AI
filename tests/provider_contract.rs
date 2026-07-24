@@ -18,7 +18,7 @@ const FIXTURE: &str = include_str!("fixtures/provider/tool_then_answer.json");
 #[test]
 fn scripted_fixture_uses_the_current_product_identity() {
     assert!(FIXTURE.contains("# Carl"));
-    assert!(!FIXTURE.contains("ArcWren"));
+    assert!(!FIXTURE.contains(&["Arc", "Wren"].concat()));
 }
 
 fn tool_call_id() -> ToolCallId {

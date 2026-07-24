@@ -2,7 +2,7 @@
 
 ## Our standard
 
-ArcWren contributors, maintainers, and community members are expected to make participation respectful, safe, and productive. Constructive disagreement about code, design, evidence, and tradeoffs is welcome. Harassment, discrimination, threats, sexualized attention, deliberate intimidation, sustained disruption, and publication of another person's private information are not acceptable.
+Carl contributors, maintainers, and community members are expected to make participation respectful, safe, and productive. Constructive disagreement about code, design, evidence, and tradeoffs is welcome. Harassment, discrimination, threats, sexualized attention, deliberate intimidation, sustained disruption, and publication of another person's private information are not acceptable.
 
 Examples of positive participation include:
 

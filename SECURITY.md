@@ -1,6 +1,6 @@
 # Security Policy
 
-ArcWren is pre-alpha foundation software and is not ready to execute end-user agent workloads. The runtime, production providers, tools, policy engine, TUI, and Telegram gateway described by the v1 design are not implemented.
+Carl is pre-alpha foundation software and is not ready to execute end-user agent workloads. The runtime, production providers, tools, policy engine, TUI, and Telegram gateway described by the v1 design are not implemented.
 
 ## Supported versions
 
@@ -16,6 +16,6 @@ If private vulnerability reporting is unavailable, open a public issue containin
 
 The durable foundation currently provides versioned event contracts, typed sanitized user-facing errors, checksum-verified SQLite migrations, and deterministic provider tests without live credentials. These properties do not create a sandbox.
 
-The planned threat model and enforcement boundaries are documented in [docs/security.md](docs/security.md). In particular, future shell execution will be constrained by policy and process controls, not a complete security sandbox. Never use ArcWren to execute code you would not trust under the host account.
+The planned threat model and enforcement boundaries are documented in [docs/security.md](docs/security.md). In particular, future shell execution will be constrained by policy and process controls, not a complete security sandbox. Never use Carl to execute code you would not trust under the host account.
 
 Credential values must never be committed, placed in issues, or included in fixtures. OpenAI support will use an OpenAI Platform API key; copying Codex or ChatGPT credentials or using undocumented OAuth is out of scope.

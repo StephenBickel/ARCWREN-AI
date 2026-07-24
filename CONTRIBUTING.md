@@ -1,10 +1,10 @@
-# Contributing to ArcWren
+# Contributing to Carl
 
-ArcWren is a pre-alpha foundation. Contributions are welcome, but public documentation and code must distinguish implemented behavior from the approved v1 design.
+Carl is a pre-alpha foundation. Contributions are welcome, but public documentation and code must distinguish implemented behavior from the approved v1 design.
 
 ## Before starting
 
-- Read the [v1 design](docs/superpowers/specs/2026-07-13-arcwren-v1-design.md) and relevant records in `docs/adr/`.
+- Read [CARL.md](CARL.md), the [Carl design](docs/superpowers/specs/2026-07-23-carl-top-tier-harness-design.md), and relevant records in `docs/adr/`.
 - Discuss large scope or architecture changes before implementation.
 - Report suspected vulnerabilities through the private process in [SECURITY.md](SECURITY.md), not a public issue.
 - Never commit credentials, private traces, generated binaries, or personal data.

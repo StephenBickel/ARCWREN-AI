@@ -1,6 +1,10 @@
-# ArcWren
+# Carl
 
-ArcWren is a minimal, local-first Rust agent harness built around a deterministic core, replayable events, explicit policy boundaries, and interchangeable model providers.
+Carl is Stephen Bickel's personal, local-first Rust coding agent and an open-source agent harness built around a deterministic core, replayable events, explicit policy boundaries, and interchangeable model providers.
+
+Carl's personality and operating principles are part of the repository; see the
+[public operating contract](CARL.md). The name is personal rather than an acronym:
+Carl is Stephen's middle name and his grandfather's name.
 
 ## Terminal and Telegram workflow
 
@@ -9,7 +13,7 @@ The intended v1 experience is one continuous session across a local terminal UI 
 ## Status: pre-alpha foundation
 
 > [!WARNING]
-> ArcWren is currently a **pre-alpha foundation** and is not yet a usable end-user agent. Only the CLI help shell is usable. The HTTP/OpenAI adapters, runtime tool loop, built-in tools, TUI interaction, and Telegram gateway are not implemented. Command names shown by help reserve the planned interface. Only the five placeholder commands `serve`, `auth`, `pair`, `doctor`, and `sessions` return not-implemented errors; Clap's built-in `help` command displays help.
+> Carl is currently a **pre-alpha foundation** and is not yet a usable end-user agent. Only the CLI help shell is usable. The HTTP/OpenAI adapters, runtime tool loop, built-in tools, TUI interaction, and Telegram gateway are not implemented. Command names shown by help reserve the planned interface. Only the five placeholder commands `serve`, `auth`, `pair`, `doctor`, and `sessions` return not-implemented errors; Clap's built-in `help` command displays help.
 
 The repository is being developed in public so the storage, event, provider, and policy boundaries can be reviewed before consequential tool execution exists.
 
@@ -39,7 +43,7 @@ cargo run --locked -- --help
 If the binary is already on `PATH`, the equivalent help command is:
 
 ```sh
-arcwren --help
+carl --help
 ```
 
 Do not rely on `serve`, `auth`, `pair`, `doctor`, or `sessions` yet; they are placeholders.
@@ -57,17 +61,17 @@ Telegram (planned) ---+       |
                               +--> append-only event log --> projections
 ```
 
-Today, the event model, storage layer, budget primitives, provider boundary, and scripted adapter exist. The runtime, policy evaluator, tools, production adapters, and frontends remain planned. See the [architecture guide](docs/architecture.md), the [approved v1 design](docs/superpowers/specs/2026-07-13-arcwren-v1-design.md), and the decisions on [event-sourced execution](docs/adr/0001-event-sourced-runtime.md) and a [single-process v1](docs/adr/0002-single-process-v1.md).
+Today, the event model, storage layer, budget primitives, provider boundary, and scripted adapter exist. The runtime, policy evaluator, tools, production adapters, and frontends remain planned. See the [architecture guide](docs/architecture.md), the [approved Carl design](docs/superpowers/specs/2026-07-23-carl-top-tier-harness-design.md), and the decisions on [event-sourced execution](docs/adr/0001-event-sourced-runtime.md) and a [single-process v1](docs/adr/0002-single-process-v1.md).
 
 ## Security model
 
-ArcWren treats model output, remote messages, fetched content, and tool arguments as untrusted. The v1 design requires workspace-confined file access, bounded output, explicit approval for consequential actions, credential redaction, and stricter remote policy. Most of those enforcement layers are not implemented yet; see the [security model](docs/security.md) and [security policy](SECURITY.md).
+Carl treats model output, remote messages, fetched content, and tool arguments as untrusted. The v1 design requires workspace-confined file access, bounded output, explicit approval for consequential actions, credential redaction, and stricter remote policy. Most of those enforcement layers are not implemented yet; see the [security model](docs/security.md) and [security policy](SECURITY.md).
 
 **Shell isolation is policy- and process-based in the v1 design; it is not a complete security sandbox.** A future `shell.exec` tool must not be treated as containment for hostile code, even after its workspace, timeout, environment-filtering, and cancellation controls are implemented.
 
 ## Provider setup
 
-Provider configuration is not implemented. The approved design calls for the OpenAI Responses API to use an **OpenAI Platform API key**, plus an OpenAI-compatible adapter for local or third-party endpoints. ArcWren will not reuse Codex or ChatGPT credentials and will not call undocumented OAuth endpoints. See the [configuration guide](docs/configuration.md) and the [authentication ADR](docs/adr/0003-no-undocumented-oauth.md).
+Provider configuration is not implemented. The approved design calls for the OpenAI Responses API to use an **OpenAI Platform API key**, plus an OpenAI-compatible adapter for local or third-party endpoints. Carl will not reuse Codex or ChatGPT credentials and will not call undocumented OAuth endpoints. See the [configuration guide](docs/configuration.md) and the [authentication ADR](docs/adr/0003-no-undocumented-oauth.md).
 
 ## Telegram pairing
 
@@ -96,8 +100,8 @@ Public behavior should be developed test-first with deterministic fixtures; norm
 - [ ] Owner-only Telegram long-polling gateway
 - [ ] Cross-platform CI and checksummed releases
 
-The [approved design](docs/superpowers/specs/2026-07-13-arcwren-v1-design.md) is the source of truth for v1 scope; checkboxes here describe repository state, not release promises.
+The [approved design](docs/superpowers/specs/2026-07-23-carl-top-tier-harness-design.md) is the source of truth for v1 scope; checkboxes here describe repository state, not release promises.
 
 ## License
 
-ArcWren is available under the [MIT License](LICENSE).
+Carl is available under the [MIT License](LICENSE).

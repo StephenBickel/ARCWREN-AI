@@ -10,8 +10,8 @@ The planned configuration boundary separates non-secret choices from secret valu
 
 | Setting | Intended location |
 | --- | --- |
-| Provider, model, endpoint, workspace, budgets | ArcWren configuration |
-| Credential reference name | ArcWren configuration |
+| Provider, model, endpoint, workspace, budgets | Carl configuration |
+| Credential reference name | Carl configuration |
 | API keys and Telegram bot tokens | OS credential store |
 | Automation-only credentials | Process environment, never copied to config or traces |
 
@@ -25,7 +25,7 @@ The approved v1 provider targets are:
 
 None of these production adapters exists yet. The repository currently contains only the provider-neutral trait and deterministic scripted provider.
 
-ArcWren will not reuse Codex or ChatGPT credentials or use undocumented OAuth. A future documented public OAuth flow may implement the existing authentication boundary without changing provider-neutral runtime types.
+Carl will not reuse Codex or ChatGPT credentials or use undocumented OAuth. A future documented public OAuth flow may implement the existing authentication boundary without changing provider-neutral runtime types.
 
 ## Workspace, policy, and budgets
 

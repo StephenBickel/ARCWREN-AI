@@ -4,6 +4,7 @@ use carl::cli::Cli;
 use clap::{CommandFactory, Parser, error::ErrorKind};
 
 const PUBLIC_DOCS: &[&str] = &[
+    "CARL.md",
     "README.md",
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",
@@ -16,6 +17,36 @@ const PUBLIC_DOCS: &[&str] = &[
     "docs/adr/0001-event-sourced-runtime.md",
     "docs/adr/0002-single-process-v1.md",
     "docs/adr/0003-no-undocumented-oauth.md",
+    "docs/superpowers/specs/2026-07-23-carl-top-tier-harness-design.md",
+];
+
+const ACTIVE_IDENTITY_SURFACES: &[&str] = &[
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "SECURITY.md",
+    "docs/architecture.md",
+    "docs/security.md",
+    "docs/configuration.md",
+    "docs/telegram.md",
+    "docs/adr/0002-single-process-v1.md",
+    "docs/adr/0003-no-undocumented-oauth.md",
+    "src/cli.rs",
+    "src/error.rs",
+    "src/main.rs",
+    "src/runtime/budget.rs",
+    "src/storage/repository.rs",
+    "src/storage/schema.rs",
+    "tests/cli_contract.rs",
+    "tests/docs_contract.rs",
+    "tests/domain_contract.rs",
+    "tests/identity_contract.rs",
+    "tests/provider_contract.rs",
+    "tests/storage_contract.rs",
+    "tests/workflow_contract.rs",
+    "tests/fixtures/provider/tool_then_answer.json",
 ];
 
 fn repository_root() -> PathBuf {
@@ -75,39 +106,39 @@ fn readme_local_links_resolve_to_files() {
 }
 
 #[test]
-fn fenced_arcwren_commands_match_the_clap_command_tree() {
+fn fenced_carl_commands_match_the_clap_command_tree() {
     let readme = read_readme();
-    validate_fenced_arcwren_commands(&readme).unwrap_or_else(|error| panic!("{error}"));
+    validate_fenced_carl_commands(&readme).unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[test]
-fn fenced_arcwren_command_checker_rejects_unknown_option_only_invocations() {
-    let markdown = "```sh\narcwren --bogus\n```";
+fn fenced_carl_command_checker_rejects_unknown_option_only_invocations() {
+    let markdown = "```sh\ncarl --bogus\n```";
 
-    let error = validate_fenced_arcwren_commands(markdown)
+    let error = validate_fenced_carl_commands(markdown)
         .expect_err("the docs checker must reject an unknown root option");
 
     assert!(error.contains("--bogus"));
 }
 
-fn validate_fenced_arcwren_commands(markdown: &str) -> Result<(), String> {
+fn validate_fenced_carl_commands(markdown: &str) -> Result<(), String> {
     let mut command = Cli::command();
     let clap_commands: BTreeSet<_> = command
         .get_subcommands()
         .map(|subcommand| subcommand.get_name().to_owned())
         .collect();
     let help = command.render_long_help().to_string();
-    let documented_commands = fenced_arcwren_commands(markdown);
+    let documented_commands = fenced_carl_commands(markdown);
 
     if documented_commands.is_empty() {
-        return Err("README must include at least one fenced arcwren command".to_owned());
+        return Err("README must include at least one fenced carl command".to_owned());
     }
 
     for documented in documented_commands {
         let arguments: Vec<_> = documented.split_whitespace().collect();
-        if arguments.first() != Some(&"arcwren") {
+        if arguments.first() != Some(&"carl") {
             return Err(format!(
-                "fenced command does not begin with `arcwren`: `{documented}`"
+                "fenced command does not begin with `carl`: `{documented}`"
             ));
         }
 
@@ -116,7 +147,7 @@ fn validate_fenced_arcwren_commands(markdown: &str) -> Result<(), String> {
             Err(error) if error.kind() == ErrorKind::DisplayHelp => {}
             Err(error) => {
                 return Err(format!(
-                    "README documents invalid arcwren invocation `{documented}`: {error}"
+                    "README documents invalid carl invocation `{documented}`: {error}"
                 ));
             }
         }
@@ -131,7 +162,7 @@ fn validate_fenced_arcwren_commands(markdown: &str) -> Result<(), String> {
                 .any(|line| line.split_whitespace().next() == Some(name.as_str()))
         {
             return Err(format!(
-                "arcwren --help does not expose documented command `{name}`"
+                "carl --help does not expose documented command `{name}`"
             ));
         }
     }
@@ -170,6 +201,32 @@ fn readme_states_the_current_status_and_security_boundaries() {
     }
 }
 
+#[test]
+fn active_product_surfaces_do_not_use_the_retired_brand() {
+    let retired_brand = ["arc", "wren"].concat();
+
+    for relative_path in ACTIVE_IDENTITY_SURFACES {
+        let path = repository_root().join(relative_path);
+        let contents = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let normalized = contents.to_lowercase();
+
+        assert!(
+            !normalized.contains(&retired_brand),
+            "active product surface contains retired brand: {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn readme_points_to_the_carl_design_and_public_contract() {
+    let readme = read_readme();
+
+    assert!(readme.contains("[public operating contract](CARL.md)"));
+    assert!(readme.contains("docs/superpowers/specs/2026-07-23-carl-top-tier-harness-design.md"));
+}
+
 fn markdown_link_targets(markdown: &str) -> Vec<&str> {
     markdown
         .match_indices("](")
@@ -181,7 +238,7 @@ fn markdown_link_targets(markdown: &str) -> Vec<&str> {
         .collect()
 }
 
-fn fenced_arcwren_commands(markdown: &str) -> Vec<&str> {
+fn fenced_carl_commands(markdown: &str) -> Vec<&str> {
     let mut in_fence = false;
     let mut commands = Vec::new();
 
@@ -196,7 +253,7 @@ fn fenced_arcwren_commands(markdown: &str) -> Vec<&str> {
         }
 
         let line = line.strip_prefix("$ ").unwrap_or(line);
-        if line == "arcwren" || line.starts_with("arcwren ") {
+        if line == "carl" || line.starts_with("carl ") {
             commands.push(line);
         }
     }

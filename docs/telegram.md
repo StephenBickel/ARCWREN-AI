@@ -14,14 +14,14 @@ V1 permits one owner and one private chat:
 
 1. The local owner requests a short-lived, one-time pairing code.
 2. The owner sends that code to the bot in a private Telegram chat.
-3. ArcWren atomically records the Telegram user and private-chat identifiers and consumes the code.
+3. Carl atomically records the Telegram user and private-chat identifiers and consumes the code.
 4. Re-pairing invalidates the prior owner.
 
 Only a keyed representation of the active code should be stored. Expired, reused, group, channel, guest, and unpaired updates must be ignored before invoking a model. Pairing behavior requires deterministic clock, randomness, persistence, and admission-control tests before release.
 
 ## Planned session controls
 
-The owner-only private chat is designed to support `/new`, `/sessions`, `/resume`, `/cancel`, `/status`, and `/help`. These are Telegram message commands, not current `arcwren` CLI commands. Ordinary private text will map to the owner's persistent ArcWren session.
+The owner-only private chat is designed to support `/new`, `/sessions`, `/resume`, `/cancel`, `/status`, and `/help`. These are Telegram message commands, not current `carl` CLI commands. Ordinary private text will map to the owner's persistent Carl session.
 
 Streaming will use a bounded initial status message followed by rate-limited edits and safe splitting of long final output. Persisted update offsets and processed identifiers will prevent acknowledged updates from replaying after restart.
 
@@ -33,4 +33,4 @@ Each callback will refer to one opaque persisted approval. Approval is owner-onl
 
 ## Current status
 
-There is no Telegram transport, token loading, pairing store integration, admission controller, renderer, callback handler, or gateway loop in the current codebase. Do not provide a real bot token to this revision. The [security model](security.md) and [approved design](superpowers/specs/2026-07-13-arcwren-v1-design.md) define the controls implementation must prove.
+There is no Telegram transport, token loading, pairing store integration, admission controller, renderer, callback handler, or gateway loop in the current codebase. Do not provide a real bot token to this revision. The [security model](security.md) and [approved Carl design](superpowers/specs/2026-07-23-carl-top-tier-harness-design.md) define the controls implementation must prove.

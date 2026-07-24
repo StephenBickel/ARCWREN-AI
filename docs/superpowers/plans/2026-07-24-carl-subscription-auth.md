@@ -388,8 +388,12 @@ Carl does not capture, parse, redact, relay, serialize, or persist its login out
 Add a fieldless, non-serializable `LoginChallenge::ProviderManaged` result to represent
 this terminal-owned ceremony. Reject login when no foreground terminal can be attached;
 Telegram and other remote channels may query status but cannot initiate Grok login in
-V1. Test success, decline, timeout, cancellation, terminal absence, and process cleanup
-with a fake binary.
+V1. The `SubscriptionAuthBroker` contract is deliberately sequential: dropping the
+in-flight foreground login future is its cancellation boundary and must terminate the
+entire supervised process group/job before returning control; callers may then invoke
+`cancel_login` only as a best-effort reconciliation step. Test success, decline,
+timeout, future-drop cancellation, terminal absence, and process cleanup with a fake
+binary.
 
 Use `grok --no-auto-update agent stdio` only to perform a local
 `initialize`/authenticate handshake against the isolated `GROK_HOME`; ACP has no
@@ -432,8 +436,11 @@ Grok Build stores provider-managed bearer credentials in `$GROK_HOME/auth.json`,
 documented OS keychain. Carl must never open or deserialize that file. After successful
 login, inspect metadata only: require a regular, non-symlink/non-reparse, single-link
 file with owner-only permissions (`0600` on Unix and a non-broad DACL on Windows) under
-the owner-only provider home. If this check fails, invoke provider-owned logout and
-fail closed. Status means authenticated only; it does not prove subscription
+the owner-only provider home. Perform the same metadata preflight before launching any
+auth-bearing Grok process. If the path is a symlink, reparse point, hard link, or has
+unsafe ownership/permissions, fail closed without invoking Grok: provider-owned logout
+could otherwise follow or mutate an attacker-selected target. Status means
+authenticated only; it does not prove subscription
 eligibility or model entitlement, so return `AuthMethod::ProviderManaged` and
 `plan: None`. Serialize login, logout, and ACP status probes because status may refresh
 the provider credential file. After both login and logout, run the ACP probe and trust

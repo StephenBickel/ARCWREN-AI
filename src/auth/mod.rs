@@ -2,16 +2,18 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
+use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use url::Url;
 
 const MAX_AUTHORIZATION_URL_BYTES: usize = 8_192;
 const MAX_USER_CODE_BYTES: usize = 128;
+const INVALID_AUTH_DATA: &str = "invalid subscription authentication data";
 
 pub type AuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AuthError>> + Send + 'a>>;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum SubscriptionService {
     #[serde(rename = "openai_codex")]
     OpenAiCodex,
@@ -19,7 +21,7 @@ pub enum SubscriptionService {
     XaiGrok,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum AuthMethod {
     #[serde(rename = "browser_oauth")]
     BrowserOAuth,
@@ -29,7 +31,7 @@ pub enum AuthMethod {
     ProviderManaged,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum SubscriptionPlan {
     #[serde(rename = "free")]
     Free,
@@ -59,7 +61,7 @@ pub enum SubscriptionPlan {
     Unknown,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum AuthUnavailableCode {
     #[serde(rename = "executable_missing")]
     ExecutableMissing,
@@ -108,7 +110,9 @@ impl<'de> Deserialize<'de> for AuthState {
     where
         D: Deserializer<'de>,
     {
-        match AuthStateWire::deserialize(deserializer)? {
+        let wire = AuthStateWire::deserialize(deserializer)
+            .map_err(|_| D::Error::custom(INVALID_AUTH_DATA))?;
+        match wire {
             AuthStateWire::SignedOut {} => Ok(Self::SignedOut),
             AuthStateWire::Pending {} => Ok(Self::Pending),
             AuthStateWire::SignedIn { method, plan } => Ok(Self::SignedIn { method, plan }),
@@ -138,6 +142,7 @@ impl AuthorizationUrl {
             || !url.username().is_empty()
             || url.password().is_some()
             || url.fragment().is_some()
+            || contains_credential_query(&url)
         {
             return Err(AuthError::from_code(AuthErrorCode::InvalidAuthorizationUrl));
         }
@@ -149,6 +154,38 @@ impl AuthorizationUrl {
     pub fn into_foreground_string(self) -> String {
         self.0.to_string()
     }
+}
+
+fn contains_credential_query(url: &Url) -> bool {
+    url.query_pairs()
+        .any(|(key, value)| is_credential_query_key(&key) || starts_with_bearer_credential(&value))
+}
+
+fn is_credential_query_key(key: &str) -> bool {
+    [
+        "accesstoken",
+        "refreshtoken",
+        "idtoken",
+        "authorization",
+        "cookie",
+        "setcookie",
+        "sessioncookie",
+    ]
+    .iter()
+    .any(|expected| {
+        key.bytes()
+            .filter(|byte| !matches!(byte, b'-' | b'_'))
+            .map(|byte| byte.to_ascii_lowercase())
+            .eq(expected.bytes())
+    })
+}
+
+fn starts_with_bearer_credential(value: &str) -> bool {
+    let value = value.trim_start_matches(|character: char| character.is_ascii_whitespace());
+    value
+        .as_bytes()
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"bearer "))
 }
 
 impl fmt::Debug for AuthorizationUrl {
@@ -209,7 +246,7 @@ pub trait SubscriptionAuthBroker: Send {
     fn cancel_login(&mut self) -> AuthFuture<'_, ()>;
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum AuthErrorCode {
     #[serde(rename = "invalid_authorization_url")]
     InvalidAuthorizationUrl,
@@ -294,3 +331,85 @@ impl From<AuthUnavailableCode> for AuthError {
         Self::from_code(code.into())
     }
 }
+
+fn deserialize_closed_auth_enum<'de, D, T>(
+    deserializer: D,
+    parse: impl FnOnce(&str) -> Option<T>,
+) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value =
+        String::deserialize(deserializer).map_err(|_| D::Error::custom(INVALID_AUTH_DATA))?;
+    parse(&value).ok_or_else(|| D::Error::custom(INVALID_AUTH_DATA))
+}
+
+macro_rules! impl_closed_auth_deserialize {
+    ($type:ty, $($wire_value:literal => $variant:path),+ $(,)?) => {
+        impl<'de> Deserialize<'de> for $type {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                deserialize_closed_auth_enum(deserializer, |value| match value {
+                    $($wire_value => Some($variant),)+
+                    _ => None,
+                })
+            }
+        }
+    };
+}
+
+impl_closed_auth_deserialize!(
+    SubscriptionService,
+    "openai_codex" => SubscriptionService::OpenAiCodex,
+    "xai_grok" => SubscriptionService::XaiGrok,
+);
+
+impl_closed_auth_deserialize!(
+    AuthMethod,
+    "browser_oauth" => AuthMethod::BrowserOAuth,
+    "device_code" => AuthMethod::DeviceCode,
+    "provider_managed" => AuthMethod::ProviderManaged,
+);
+
+impl_closed_auth_deserialize!(
+    SubscriptionPlan,
+    "free" => SubscriptionPlan::Free,
+    "go" => SubscriptionPlan::Go,
+    "plus" => SubscriptionPlan::Plus,
+    "pro" => SubscriptionPlan::Pro,
+    "pro_lite" => SubscriptionPlan::ProLite,
+    "team" => SubscriptionPlan::Team,
+    "business" => SubscriptionPlan::Business,
+    "enterprise" => SubscriptionPlan::Enterprise,
+    "education" => SubscriptionPlan::Education,
+    "super_grok" => SubscriptionPlan::SuperGrok,
+    "x_premium" => SubscriptionPlan::XPremium,
+    "x_premium_plus" => SubscriptionPlan::XPremiumPlus,
+    "unknown" => SubscriptionPlan::Unknown,
+);
+
+impl_closed_auth_deserialize!(
+    AuthUnavailableCode,
+    "executable_missing" => AuthUnavailableCode::ExecutableMissing,
+    "unsupported_version" => AuthUnavailableCode::UnsupportedVersion,
+    "keyring_unavailable" => AuthUnavailableCode::KeyringUnavailable,
+    "protocol_mismatch" => AuthUnavailableCode::ProtocolMismatch,
+    "provider_rejected" => AuthUnavailableCode::ProviderRejected,
+    "timed_out" => AuthUnavailableCode::TimedOut,
+);
+
+impl_closed_auth_deserialize!(
+    AuthErrorCode,
+    "invalid_authorization_url" => AuthErrorCode::InvalidAuthorizationUrl,
+    "invalid_user_code" => AuthErrorCode::InvalidUserCode,
+    "executable_missing" => AuthErrorCode::ExecutableMissing,
+    "unsupported_version" => AuthErrorCode::UnsupportedVersion,
+    "keyring_unavailable" => AuthErrorCode::KeyringUnavailable,
+    "protocol_mismatch" => AuthErrorCode::ProtocolMismatch,
+    "provider_rejected" => AuthErrorCode::ProviderRejected,
+    "timed_out" => AuthErrorCode::TimedOut,
+    "cancelled" => AuthErrorCode::Cancelled,
+    "sidecar_exited" => AuthErrorCode::SidecarExited,
+);

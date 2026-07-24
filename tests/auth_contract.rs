@@ -181,9 +181,7 @@ fn domain_closed_enums_have_stable_wire_values() -> Result<(), Box<dyn std::erro
 #[test]
 fn domain_login_challenge_is_redacted_until_explicitly_consumed()
 -> Result<(), Box<dyn std::error::Error>> {
-    let browser_url = format!(
-        "https://auth.example.test/oauth/authorize?{OAUTH_QUERY}&token=Bearer%20access-token-secret"
-    );
+    let browser_url = format!("https://auth.example.test/oauth/authorize?{OAUTH_QUERY}");
     let browser = LoginChallenge::Browser {
         authorization_url: AuthorizationUrl::parse(&browser_url)?,
     };
@@ -200,8 +198,7 @@ fn domain_login_challenge_is_redacted_until_explicitly_consumed()
         "foreground login is the only intentional URL reveal"
     );
 
-    let verification_url =
-        format!("https://device.example.test/activate?{OAUTH_QUERY}&cookie={COOKIE}");
+    let verification_url = format!("https://device.example.test/activate?{OAUTH_QUERY}");
     let device = LoginChallenge::Device {
         verification_url: AuthorizationUrl::parse(&verification_url)?,
         user_code: UserCode::parse(USER_CODE)?,
@@ -239,10 +236,25 @@ fn domain_foreground_values_reject_unsafe_or_ambiguous_input() {
         "https://user:password@auth.example.test/login",
         "https://auth.example.test/login#access-token-secret",
         "https://auth.example.test/login?state=contains raw whitespace",
+        "https://auth.example.test/login?access_token=access-token-secret",
+        "https://auth.example.test/login?ACCESS%5FTOKEN=access-token-secret",
+        "https://auth.example.test/login?refresh-token=refresh-token-secret",
+        "https://auth.example.test/login?id%5Ftoken=id-token-secret",
+        "https://auth.example.test/login?Authorization=Basic%20credential-secret",
+        "https://auth.example.test/login?cookie=cookie-secret",
+        "https://auth.example.test/login?Set%2DCookie=cookie-secret",
+        "https://auth.example.test/login?SESSION_COOKIE=cookie-secret",
+        "https://auth.example.test/login?state=bEaReR%20access-token-secret",
+        "https://auth.example.test/login?state=%20Bearer+access-token-secret",
     ] {
         let error = AuthorizationUrl::parse(invalid).unwrap_err();
         assert_eq!(error.code(), AuthErrorCode::InvalidAuthorizationUrl);
-        assert_contains_no_sentinel(&format!("{error:?}"));
+        for diagnostic in [format!("{error:?}"), error.to_string()] {
+            assert_contains_no_sentinel(&diagnostic);
+            if !invalid.is_empty() {
+                assert!(!diagnostic.contains(invalid));
+            }
+        }
     }
     let oversized_url = format!(
         "https://auth.example.test/login?value={}",
@@ -268,6 +280,26 @@ fn domain_foreground_values_reject_unsafe_or_ambiguous_input() {
             .into_foreground_string(),
         "ABCD-1234"
     );
+}
+
+#[test]
+fn domain_closed_auth_deserialization_errors_are_static_and_sanitized() {
+    assert_static_auth_deserialization_error::<SubscriptionService>(json!(ACCOUNT_EMAIL));
+    assert_static_auth_deserialization_error::<AuthMethod>(json!(BEARER_TOKEN));
+    assert_static_auth_deserialization_error::<SubscriptionPlan>(json!(REFRESH_TOKEN));
+    assert_static_auth_deserialization_error::<AuthUnavailableCode>(json!(COOKIE));
+    assert_static_auth_deserialization_error::<AuthErrorCode>(json!(CREDENTIAL_PATH));
+    assert_static_auth_deserialization_error::<AuthError>(json!(USER_CODE));
+
+    for hostile_state in [
+        json!({"state": ACCOUNT_EMAIL}),
+        json!({"state": "signed_in", "method": BEARER_TOKEN}),
+        json!({"state": "signed_in", "method": "browser_oauth", "plan": REFRESH_TOKEN}),
+        json!({"state": "unavailable", "code": COOKIE}),
+        json!({"state": "pending", "/Users/stephen/.codex/auth.json": USER_CODE}),
+    ] {
+        assert_static_auth_deserialization_error::<AuthState>(hostile_state);
+    }
 }
 
 #[test]
@@ -406,7 +438,7 @@ fn domain_auth_state_is_not_a_session_event() {
 }
 
 fn verification_url_string() -> String {
-    format!("https://device.example.test/activate?{OAUTH_QUERY}&cookie={COOKIE}")
+    format!("https://device.example.test/activate?{OAUTH_QUERY}")
 }
 
 fn hostile_provider_error() -> &'static str {
@@ -447,6 +479,20 @@ where
         assert_eq!(serde_json::from_value::<T>(json!(expected))?, variant);
     }
     Ok(())
+}
+
+fn assert_static_auth_deserialization_error<T>(value: Value)
+where
+    T: fmt::Debug + serde::de::DeserializeOwned,
+{
+    let error =
+        serde_json::from_value::<T>(value).expect_err("hostile provider data must not deserialize");
+    let diagnostic = error.to_string();
+    assert_eq!(
+        diagnostic, "invalid subscription authentication data",
+        "auth deserialization errors must be static"
+    );
+    assert_contains_no_sentinel(&diagnostic);
 }
 
 fn assert_send<T: Send>(_: &T) {}

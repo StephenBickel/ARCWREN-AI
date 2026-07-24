@@ -628,11 +628,20 @@ fn active_product_surfaces_do_not_use_the_retired_brand() {
 #[test]
 fn readme_points_to_the_carl_design_and_public_contract() {
     let readme = read_readme();
+    let carl_design = fs::read_to_string(
+        repository_root().join("docs/superpowers/specs/2026-07-23-carl-top-tier-harness-design.md"),
+    )
+    .expect("Carl design should be readable");
 
     assert!(readme.contains("[public operating contract](CARL.md)"));
     assert!(readme.contains(
         "docs/superpowers/specs/2026-07-23-carl-top-tier-harness-design.md"
     ));
+    assert!(
+        carl_design
+            .lines()
+            .any(|line| line == "Status: approved for implementation")
+    );
 }
 ```
 
@@ -807,7 +816,9 @@ Run:
 cargo test --test docs_contract --test identity_contract
 ```
 
-Expected: 10 tests pass: 7 documentation tests and 3 identity tests.
+Expected: 10 tests pass: 7 documentation tests and 3 identity tests. The README link,
+public operating contract, and Carl design's exact `Status: approved for implementation`
+line are kept consistent by the documentation contract.
 
 - [ ] **Step 8: Check active branding directly**
 

@@ -1,6 +1,6 @@
 # Carl: Top-Tier Personal Coding Harness Design
 
-Status: draft for stakeholder review
+Status: approved for implementation
 Date: 2026-07-23
 Decision owner: Stephen Bickel
 

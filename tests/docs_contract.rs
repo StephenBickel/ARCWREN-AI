@@ -222,9 +222,18 @@ fn active_product_surfaces_do_not_use_the_retired_brand() {
 #[test]
 fn readme_points_to_the_carl_design_and_public_contract() {
     let readme = read_readme();
+    let carl_design = fs::read_to_string(
+        repository_root().join("docs/superpowers/specs/2026-07-23-carl-top-tier-harness-design.md"),
+    )
+    .expect("Carl design should be readable");
 
     assert!(readme.contains("[public operating contract](CARL.md)"));
     assert!(readme.contains("docs/superpowers/specs/2026-07-23-carl-top-tier-harness-design.md"));
+    assert!(
+        carl_design
+            .lines()
+            .any(|line| line == "Status: approved for implementation")
+    );
 }
 
 fn markdown_link_targets(markdown: &str) -> Vec<&str> {

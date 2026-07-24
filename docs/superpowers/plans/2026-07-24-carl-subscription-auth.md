@@ -1,0 +1,398 @@
+# Carl Subscription Authentication Foundation Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` to implement this plan task by task with a fresh implementer and reviewer for each task.
+
+**Goal:** Let Carl users securely establish and inspect eligible ChatGPT and Grok subscription sessions without exposing provider credentials.
+
+**Architecture:** Subscription access uses provider-owned local sidecars, not bearer tokens inside Carl. Codex app-server owns ChatGPT login and Grok Build owns xAI login. Carl launches both with isolated provider homes, reports only non-secret auth status, and never receives tokens. Actual Codex/Grok delegate tools follow later, after Phase 3, under `2026-07-24-carl-subscription-delegates.md`.
+
+**Tech Stack:** Rust 2024, Tokio process I/O, bounded JSONL/JSON-RPC, serde, semver, and deterministic current-test-executable sidecar fixtures.
+
+## Global constraints
+
+- Follow ADR 0003 and ADR 0004.
+- Never read `~/.codex`, `~/.grok`, or another application's auth cache.
+- Never receive, parse, log, serialize, or forward provider access/refresh tokens.
+- Never copy Codex, Grok CLI, OpenCode, or Kilo OAuth client identities.
+- Set a dedicated `CODEX_HOME` or `GROK_HOME` for every sidecar process.
+- Use local child-process stdio only. No network listener is allowed.
+- Do not silently download, install, or update provider executables.
+- Pin and test supported provider executable/protocol versions; fail closed outside the supported range.
+- Keep every standard test offline by substituting deterministic fake sidecar executables.
+- This plan exposes authentication only. It does not run a model, agent, tool, or
+  delegate against a workspace.
+
+---
+
+## Task 1: Add subscription authentication domain contracts
+
+**Files:**
+
+- Create: `src/auth/mod.rs`
+- Modify: `src/lib.rs`
+- Modify: `src/error.rs`
+- Create: `tests/auth_contract.rs`
+
+### Step 1: Write failing contracts
+
+Test these provider-neutral, non-secret types:
+
+```rust
+pub enum SubscriptionService {
+    OpenAiCodex,
+    XaiGrok,
+}
+
+pub enum AuthMethod {
+    BrowserOAuth,
+    DeviceCode,
+    ProviderManaged,
+}
+
+pub enum SubscriptionPlan {
+    Free,
+    Go,
+    Plus,
+    Pro,
+    ProLite,
+    Team,
+    Business,
+    Enterprise,
+    Education,
+    SuperGrok,
+    XPremium,
+    XPremiumPlus,
+    Unknown,
+}
+
+pub enum AuthUnavailableCode {
+    ExecutableMissing,
+    UnsupportedVersion,
+    KeyringUnavailable,
+    ProtocolMismatch,
+    ProviderRejected,
+    TimedOut,
+}
+
+pub enum AuthState {
+    SignedOut,
+    Pending,
+    SignedIn {
+        method: AuthMethod,
+        plan: Option<SubscriptionPlan>,
+    },
+    Unavailable {
+        code: AuthUnavailableCode,
+    },
+}
+
+pub struct AuthorizationUrl(/* private Url */);
+pub struct UserCode(/* private String */);
+
+pub enum LoginChallenge {
+    Browser { authorization_url: AuthorizationUrl },
+    Device {
+        verification_url: AuthorizationUrl,
+        user_code: UserCode,
+    },
+}
+
+pub trait SubscriptionAuthBroker: Send {
+    fn service(&self) -> SubscriptionService;
+    fn auth_state(&mut self) -> AuthFuture<'_, AuthState>;
+    fn start_login(&mut self, method: AuthMethod) -> AuthFuture<'_, LoginChallenge>;
+    fn logout(&mut self) -> AuthFuture<'_, ()>;
+    fn cancel_login(&mut self) -> AuthFuture<'_, ()>;
+}
+```
+
+`AuthorizationUrl` and `UserCode` are deliberately revealable only to the foreground
+login command. Give both manual redacted `Debug` implementations, do not implement
+`Display` or `Serialize`, and require an explicit consuming method to build the
+foreground CLI response. `AuthState` uses closed enums rather than arbitrary provider
+strings. Map provider errors to static, typed safe codes before they cross the adapter
+boundary.
+
+Assert that `AuthState`, errors, ordinary serialization, and debug output cannot contain
+account email, OAuth query parameters, bearer token, refresh token, cookie, user code,
+or credential-file path fields. Include hostile provider errors containing those
+sentinels. Authentication state is queried from the provider-owned sidecar and is not
+appended to Carl's session journal.
+
+### Step 2: Implement and verify
+
+Run:
+
+```bash
+cargo test --test auth_contract domain -- --nocapture
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+Commit:
+
+```bash
+git add src/auth src/lib.rs src/error.rs tests/auth_contract.rs
+git commit -m "feat: add subscription auth contracts"
+```
+
+---
+
+## Task 2: Build isolated provider homes and sidecar supervision
+
+**Files:**
+
+- Create: `src/sidecar/mod.rs`
+- Create: `src/sidecar/jsonl.rs`
+- Modify: `src/lib.rs`
+- Modify: `Cargo.toml`
+- Modify: `Cargo.lock`
+- Create: `tests/sidecar_contract.rs`
+- Create: `tests/support/sidecar.rs`
+
+### Step 1: Write failing lifecycle tests
+
+Define:
+
+```rust
+pub struct SidecarCommand {
+    pub executable: PathBuf,
+    pub arguments: Vec<OsString>,
+    pub home_variable: &'static str,
+    pub isolated_home: PathBuf,
+    pub supported_versions: VersionReq,
+}
+
+pub struct JsonlSidecar { /* private child and pipes */ }
+```
+
+Test:
+
+- executable discovery returns a typed unavailable state;
+- `--version` is parsed and rejected outside the pinned range;
+- the supervisor creates an absolute provider home under Carl's data directory with
+  owner-only permissions and rejects symlinks or locations inside the workspace;
+- the child receives only an allowlisted environment plus its provider-home variable;
+- API keys, Telegram tokens, and parent credential variables are absent;
+- stdout accepts bounded JSONL only; malformed/oversized lines fail closed;
+- stderr is bounded and redacted;
+- request IDs correlate out-of-order responses;
+- cancellation closes stdin, sends graceful termination, then kills the process tree
+  after a deadline;
+- child exit wakes every pending request with one typed error.
+
+### Step 2: Implement and verify
+
+Promote Tokio to a production dependency with `process`, `io-util`, `sync`, `time`, and
+`rt` features; add `semver` and pin
+`command-group = { version = "5.0.1", features = ["with-tokio"] }`. Use
+`tokio::process::Command` with piped stdio and spawn it through
+`command_group::AsyncCommandGroup`.
+
+Process-group ownership is mandatory:
+
+- Unix: the pinned crate creates a new process group; close stdin, signal the group,
+  wait for the deadline, then kill the group.
+- Windows: the pinned crate assigns the child to a Job Object during spawn; close stdin,
+  wait for the deadline, then terminate the Job Object.
+
+Keep the `AsyncGroupChild` wrapper for the sidecar's entire lifetime inside a
+Carl-owned `SidecarProcessGuard`. Explicit cancellation performs the graceful sequence
+above. The guard's `Drop` must call the wrapper's group-aware `start_kill` directly;
+do not rely on `command-group`'s Tokio Unix `kill_on_drop` flag, which does not kill the
+Unix process group. Do not extract and manage only the leader
+`tokio::process::Child`. Record the crate and its platform code in the dependency
+review, add a source-level contract test that fails if spawning regresses to bare
+`Command::spawn`, and add a runtime regression test that drops a live supervisor
+without calling cancel and observes leader and ordinary grandchild exit.
+
+Document the Unix boundary precisely: a hostile descendant that calls `setsid` or
+moves to another process group can escape POSIX process-group cleanup. Authentication
+sidecars are version-pinned trusted provider binaries, not arbitrary commands.
+Post-Phase-3 delegate execution must add OS containment that accounts for detached
+descendants; Carl must not claim the pre-Phase-3 process group is a cgroup or equivalent
+process-tree primitive.
+
+The fake sidecar is an ignored test function in the same integration-test executable.
+`tests/support/sidecar.rs` spawns `current_exe()` with `--exact
+fake_sidecar_process --ignored --nocapture` and a scenario environment variable. This
+produces a real cross-platform executable without adding a test-only production binary.
+One scenario must spawn a grandchild and prove cancellation removes both processes.
+
+Commit:
+
+```bash
+git add Cargo.toml Cargo.lock src/sidecar src/lib.rs tests/sidecar_contract.rs tests/support/sidecar.rs
+git commit -m "feat: supervise isolated provider sidecars"
+```
+
+---
+
+## Task 3: Add Codex-owned ChatGPT subscription login
+
+**Files:**
+
+- Create: `src/auth/codex.rs`
+- Modify: `src/auth/mod.rs`
+- Create: `tests/codex_auth_contract.rs`
+- Extend: `tests/support/sidecar.rs`
+
+### Step 1: Write failing JSON-RPC login tests
+
+The adapter must:
+
+1. spawn `codex app-server --listen stdio://` with Carl's `CODEX_HOME`;
+2. send `initialize`, then `initialized`;
+3. call `account/read`;
+4. start `type: "chatgpt"` browser login or `type: "chatgptDeviceCode"`;
+5. surface only `authUrl`, or `verificationUrl` plus `userCode`;
+6. wait for `account/login/completed` and `account/updated`;
+7. expose auth method and plan type while discarding email and account identifiers;
+8. support `account/logout` and login cancellation.
+
+Test success, rejection, timeout, cancellation, incompatible handshake, malformed
+notifications, duplicate terminal notifications, and child exit. Assert fixture
+sentinels resembling bearer tokens never appear in Carl events or errors.
+
+### Step 2: Implement keyring-only isolated auth
+
+Before login, write provider-owned config beneath Carl's isolated `CODEX_HOME`:
+
+```toml
+cli_auth_credentials_store = "keyring"
+```
+
+Fail with an actionable unavailable state if Codex reports that the keyring cannot be
+used. Do not fall back to plaintext auth storage.
+
+### Step 3: Verify and commit
+
+Commit:
+
+```bash
+git add src/auth tests/codex_auth_contract.rs tests/support/sidecar.rs
+git commit -m "feat: add isolated ChatGPT subscription login"
+```
+
+---
+
+## Task 4: Add Grok-owned subscription login
+
+**Files:**
+
+- Create: `src/auth/grok.rs`
+- Modify: `src/auth/mod.rs`
+- Create: `tests/grok_auth_contract.rs`
+- Extend: `tests/support/sidecar.rs`
+
+### Step 1: Write failing login tests
+
+Carl invokes provider-owned commands using its isolated `GROK_HOME`:
+
+```text
+grok --no-auto-update login
+grok --no-auto-update login --device-auth
+grok --no-auto-update logout
+```
+
+The login process owns OAuth and token storage. Carl may surface bounded human-facing
+URL/code/status lines but never parse or persist token-shaped values. Test success,
+decline, timeout, cancellation, and redaction with a fake binary.
+
+Use `grok --no-auto-update agent stdio` only to perform a local
+`initialize`/auth-method/status handshake against the isolated `GROK_HOME`; do not
+create a session or send a prompt. Advertising `cached_token` means only that the
+method is supported. Carl must call `authenticate` with `methodId: "cached_token"` and
+report signed in only when that request succeeds. Absence of the method, a rejected or
+expired cached token, or an authentication-required response means signed out; protocol
+failures map to a typed unavailable state.
+
+Test:
+
+- `initialize` declares no host filesystem or terminal capabilities;
+- auth-method parsing followed by a successful `cached_token` authenticate request;
+- `cached_token` advertised but rejected, expired, or malformed;
+- cancellation and child cleanup;
+- exact `--no-auto-update` argv for browser login, device login, logout, status, and
+  every later delegate process.
+
+The status probe runs with cwd set to the isolated provider home, not the user's
+workspace. Reject direct provider tokens, custom OAuth client IDs, and custom inference
+base URLs in subscription mode.
+
+Commit:
+
+```bash
+git add src/auth tests/grok_auth_contract.rs tests/support/sidecar.rs
+git commit -m "feat: add isolated Grok subscription login"
+```
+
+---
+
+## Task 5: Add authentication commands, document, review, and merge
+
+**Files:**
+
+- Modify: `src/cli.rs`
+- Modify: `src/main.rs`
+- Create: `tests/auth_cli_contract.rs`
+- Modify: `docs/configuration.md`
+- Modify: `README.md`
+- Modify: `docs/architecture.md`
+- Modify: `docs/security.md`
+- Modify: `CHANGELOG.md`
+- Modify: `tests/docs_contract.rs`
+
+### Step 1: Write failing CLI tests
+
+Add:
+
+```text
+carl auth status
+carl auth login openai
+carl auth login openai --device
+carl auth logout openai
+carl auth login grok
+carl auth login grok --device
+carl auth logout grok
+```
+
+`status` performs provider-owned local handshakes and does not initiate login or model
+inference. Login is the only command allowed to open a browser or show a device code.
+JSON output contains service, availability, method, plan label, and safe error code; it
+never contains account identity, paths to credential files, or tokens.
+
+### Step 2: Implement and verify
+
+Keep the autonomous chat/run command disabled until Phase 3. Auth commands only manage
+provider-owned login state.
+
+Public docs must distinguish API-key billing from subscription access, Codex-owned from
+Grok-owned OAuth, installed executable/version requirements, isolated homes, credential
+ownership, and authentication from model execution. State that delegate tools remain
+unimplemented until the Phase 3 safety foundation exists.
+
+### Step 3: Run the full gate
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+cargo doc --no-deps
+cargo deny check
+git diff --check
+```
+
+Run the whole-branch security and correctness review. Fix every material finding and
+re-run the gate.
+
+### Step 4: Commit, PR, and merge
+
+```bash
+git add src/cli.rs src/main.rs tests/auth_cli_contract.rs README.md CHANGELOG.md docs tests/docs_contract.rs
+git commit -m "feat: add subscription authentication"
+```
+
+Push `codex/carl-subscription-auth`, open a non-draft PR, wait for
+Quality/Ubuntu/macOS/Windows CI, merge only when green, pull `main`, and rerun
+`cargo test --all-features` on the merge commit.

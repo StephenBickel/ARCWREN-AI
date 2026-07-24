@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -184,8 +185,10 @@ impl AuthorizationUrl {
 }
 
 fn contains_disallowed_authorization_query(url: &Url) -> bool {
+    let mut seen_keys = HashSet::new();
     url.query_pairs().any(|(key, value)| {
-        !ALLOWED_AUTHORIZATION_QUERY_KEYS.contains(&key.as_ref())
+        !seen_keys.insert(key.as_ref().to_owned())
+            || !ALLOWED_AUTHORIZATION_QUERY_KEYS.contains(&key.as_ref())
             || starts_with_bearer_credential(&value)
     })
 }

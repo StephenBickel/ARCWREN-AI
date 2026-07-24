@@ -258,6 +258,7 @@ fn domain_foreground_values_reject_unsafe_or_ambiguous_input() {
         "https://auth.example.test/login?ACCESS%5FTOKEN=access-token-secret",
         "https://auth.example.test/login?refresh-token=refresh-token-secret",
         "https://auth.example.test/login?id%5Ftoken=id-token-secret",
+        "https://auth.example.test/login?state=first&st%61te=second",
         "https://auth.example.test/login?Authorization=Basic%20credential-secret",
         "https://auth.example.test/login?cookie=cookie-secret",
         "https://auth.example.test/login?Set%2DCookie=cookie-secret",

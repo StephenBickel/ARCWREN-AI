@@ -14,7 +14,7 @@ struct TemporaryDatabase {
 
 impl TemporaryDatabase {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("arcwren-storage-{}.sqlite", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("carl-storage-{}.sqlite", Uuid::new_v4()));
         Self { path }
     }
 

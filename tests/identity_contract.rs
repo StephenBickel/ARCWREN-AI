@@ -1,4 +1,4 @@
-use carl::{cli::Cli, events::SessionId};
+use carl::{cli::Cli, error::CarlError, events::SessionId};
 use clap::CommandFactory;
 use predicates::prelude::PredicateBooleanExt;
 
@@ -22,4 +22,25 @@ fn carl_binary_exposes_the_reserved_command_tree() {
             .and(predicates::str::contains("doctor"))
             .and(predicates::str::contains("sessions")),
     );
+}
+
+#[test]
+fn public_error_type_and_product_messages_use_carl() {
+    let configuration = CarlError::Configuration {
+        detail: "secret path".into(),
+    };
+    let storage = CarlError::Storage {
+        detail: "secret database detail".into(),
+    };
+
+    assert_eq!(
+        configuration.user_message(),
+        "Carl's configuration is invalid."
+    );
+    assert_eq!(
+        storage.user_message(),
+        "Carl could not access its local data."
+    );
+    assert!(!configuration.to_string().contains("secret path"));
+    assert!(!storage.to_string().contains("secret database detail"));
 }

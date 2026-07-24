@@ -2,13 +2,13 @@ use chrono::{SecondsFormat, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-use crate::error::ArcWrenError;
+use crate::error::CarlError;
 
 const INITIAL_VERSION: i64 = 1;
 const INITIAL_NAME: &str = "initial schema";
 const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_init.sql");
 
-pub(crate) fn migrate(connection: &mut Connection) -> Result<(), ArcWrenError> {
+pub(crate) fn migrate(connection: &mut Connection) -> Result<(), CarlError> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(storage_error)?;
@@ -32,7 +32,7 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<(), ArcWrenError> {
     if let Some(version) = highest_version
         && version > INITIAL_VERSION
     {
-        return Err(ArcWrenError::Storage {
+        return Err(CarlError::Storage {
             detail: format!("unsupported database migration version {version}"),
         });
     }
@@ -53,14 +53,14 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<(), ArcWrenError> {
 
     if let Some((name, checksum)) = applied {
         if migration_count != INITIAL_VERSION {
-            return Err(ArcWrenError::Storage {
+            return Err(CarlError::Storage {
                 detail: format!(
                     "inconsistent migration ledger: expected {INITIAL_VERSION} row, found {migration_count}"
                 ),
             });
         }
         if name != INITIAL_NAME {
-            return Err(ArcWrenError::Storage {
+            return Err(CarlError::Storage {
                 detail: format!("migration 1 name mismatch: found {name:?}"),
             });
         }
@@ -69,20 +69,20 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<(), ArcWrenError> {
         match checksum {
             Some(checksum) if checksum == expected_checksum => {}
             Some(checksum) => {
-                return Err(ArcWrenError::Storage {
+                return Err(CarlError::Storage {
                     detail: format!(
                         "migration 1 checksum mismatch: expected {expected_checksum}, found {checksum}"
                     ),
                 });
             }
             None => {
-                return Err(ArcWrenError::Storage {
+                return Err(CarlError::Storage {
                     detail: "migration 1 checksum is missing".to_owned(),
                 });
             }
         }
     } else if migration_count != 0 {
-        return Err(ArcWrenError::Storage {
+        return Err(CarlError::Storage {
             detail: format!(
                 "inconsistent migration ledger: migration 1 is missing but {migration_count} other rows exist"
             ),
@@ -113,8 +113,8 @@ fn initial_checksum() -> String {
     format!("{:x}", Sha256::digest(INITIAL_MIGRATION.as_bytes()))
 }
 
-fn storage_error(error: rusqlite::Error) -> ArcWrenError {
-    ArcWrenError::Storage {
+fn storage_error(error: rusqlite::Error) -> CarlError {
+    CarlError::Storage {
         detail: error.to_string(),
     }
 }

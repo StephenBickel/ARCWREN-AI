@@ -6,7 +6,9 @@
 
 **Architecture:** Subscription access uses provider-owned local sidecars, not bearer tokens inside Carl. Codex app-server owns ChatGPT login and Grok Build owns xAI login. Carl launches both with isolated provider homes, reports only non-secret auth status, and never receives tokens. Actual Codex/Grok delegate tools follow later, after Phase 3, under `2026-07-24-carl-subscription-delegates.md`.
 
-**Tech Stack:** Rust 2024, Tokio process I/O, bounded JSONL/JSON-RPC, serde, semver, and deterministic current-test-executable sidecar fixtures.
+**Tech Stack:** Rust 2024, Tokio process I/O, `process-wrap` 9.1.0, bounded
+JSONL/JSON-RPC, serde, semver, and deterministic custom-harness
+current-test-executable sidecar fixtures.
 
 ## Global constraints
 
@@ -184,27 +186,48 @@ Test:
 ### Step 2: Implement and verify
 
 Promote Tokio to a production dependency with `process`, `io-util`, `sync`, `time`, and
-`rt` features; add `semver` and pin
-`command-group = { version = "5.0.1", features = ["with-tokio"] }`. Use
-`tokio::process::Command` with piped stdio and spawn it through
-`command_group::AsyncCommandGroup`.
+`rt` features; add `semver`, `libc` on Unix, `libtest-mimic` as a development
+dependency, and pin:
+
+```toml
+process-wrap = { version = "=9.1.0", default-features = false, features = [
+  "tokio1",
+  "process-group",
+  "job-object",
+] }
+```
+
+Use `tokio::process::Command` with piped stdio, call
+`tokio::process::Command::kill_on_drop(true)` as a leader-only fallback, then spawn it
+through `process_wrap::tokio::CommandWrap`.
 
 Process-group ownership is mandatory:
 
-- Unix: the pinned crate creates a new process group; close stdin, signal the group,
-  wait for the deadline, then kill the group.
-- Windows: the pinned crate assigns the child to a Job Object during spawn; close stdin,
-  wait for the deadline, then terminate the Job Object.
+- Unix: wrap with `ProcessGroup::leader()`; close stdin, signal the group with
+  `SIGTERM`, poll `try_wait()` until the deadline, call group-aware `start_kill()`, and
+  poll again to reap the leader.
+- Windows: wrap with `JobObject`; close stdin, poll until the deadline, call
+  group-aware `start_kill()` to terminate the Job Object, and poll again to reap the
+  leader.
 
-Keep the `AsyncGroupChild` wrapper for the sidecar's entire lifetime inside a
-Carl-owned `SidecarProcessGuard`. Explicit cancellation performs the graceful sequence
-above. The guard's `Drop` must call the wrapper's group-aware `start_kill` directly;
-do not rely on `command-group`'s Tokio Unix `kill_on_drop` flag, which does not kill the
-Unix process group. Do not extract and manage only the leader
-`tokio::process::Child`. Record the crate and its platform code in the dependency
-review, add a source-level contract test that fails if spawning regresses to bare
-`Command::spawn`, and add a runtime regression test that drops a live supervisor
-without calling cancel and observes leader and ordinary grandchild exit.
+Keep the `Box<dyn process_wrap::tokio::ChildWrapper>` for the sidecar's entire
+lifetime inside a Carl-owned `SidecarProcessGuard`; never unwrap and retain only the
+leader `tokio::process::Child`. Explicit cancellation performs the graceful sequence
+above. The guard's synchronous `Drop` must call the wrapper's group-aware
+`start_kill()` directly. The worker must not hold the guard mutex across `.await`, and
+must use bounded `try_wait()` polling rather than cancellation-unsafe
+`timeout(child.wait())`. When the leader exits, call `start_kill()` before releasing
+the wrapper so an ordinary descendant cannot survive it.
+
+Do not enable `process-wrap`'s `kill-on-drop` or `creation-flags` features in 9.1.0.
+The open upstream inter-wrapper lookup bug
+[`watchexec/process-wrap#35`](https://github.com/watchexec/process-wrap/issues/35)
+prevents `JobObject` from observing those wrappers. Carl's direct Tokio fallback and
+its own guard are mandatory. Record this pin, the enabled platform code, and the open
+upstream issue in dependency review. Prefer a compile-time ownership invariant around
+the private guard's `Box<dyn ChildWrapper>` over a brittle source-text assertion, and
+add runtime regressions that drop a live supervisor without calling cancel and observe
+both the leader and ordinary grandchild exit.
 
 Document the Unix boundary precisely: a hostile descendant that calls `setsid` or
 moves to another process group can escape POSIX process-group cleanup. Authentication
@@ -213,11 +236,23 @@ Post-Phase-3 delegate execution must add OS containment that accounts for detach
 descendants; Carl must not claim the pre-Phase-3 process group is a cgroup or equivalent
 process-tree primitive.
 
-The fake sidecar is an ignored test function in the same integration-test executable.
-`tests/support/sidecar.rs` spawns `current_exe()` with `--exact
-fake_sidecar_process --ignored --nocapture` and a scenario environment variable. This
-produces a real cross-platform executable without adding a test-only production binary.
-One scenario must spawn a grandchild and prove cancellation removes both processes.
+Make `sidecar_contract` a custom-harness integration test (`harness = false`) driven by
+`libtest-mimic`. Its `main` dispatches private fixture arguments before starting the
+test runner, so `current_exe()` can provide clean `--version`, strict JSONL stdio, and a
+grandchild mode without libtest writing test chatter into stdout. Pass fixture
+scenarios through private arguments rather than environment exceptions. This produces
+a real cross-platform executable without adding or shipping a production helper
+binary. Record fixture PIDs in an isolated-home file, never in protocol stdout. One
+scenario must spawn a grandchild and prove explicit cancellation, leader exit, and
+drop cleanup each remove both processes.
+
+On Unix, set provider-home directories to mode `0700` and create files with
+owner-only modes. On Windows, inherit only from a trusted Carl-owned data root and
+verify the resulting DACL does not grant broad access; ordinary Rust read-only flags
+are not an owner-only ACL. Reject symlinks and Windows reparse points, including
+junctions. Keep creation capability-relative where the platform APIs allow it and
+document the remaining trusted-data-root assumption rather than claiming a portable
+race-free path CAS.
 
 Commit:
 

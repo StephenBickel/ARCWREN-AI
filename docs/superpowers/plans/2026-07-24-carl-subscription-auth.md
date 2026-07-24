@@ -305,7 +305,10 @@ The adapter must:
 4. call `account/read` with `refreshToken: false`;
 5. start `type: "chatgpt"` browser login or `type: "chatgptDeviceCode"`;
 6. retain `loginId` only in a private non-serializable redacted wrapper and surface
-   only `authUrl`, or `verificationUrl` plus `userCode`;
+   only `authUrl`, or `verificationUrl` plus `userCode`; before surfacing, apply a
+   Codex-specific URL contract that pins `auth.openai.com` and the expected
+   `/oauth/authorize` or `/codex/device` path, rejects duplicate query keys, and
+   validates the browser flow's loopback callback shape;
 7. treat only `account/login/completed` with the exact non-null pending `loginId` as
    correlated ceremony completion, then confirm the result with bounded
    `account/read` retries;
@@ -343,6 +346,11 @@ call a broad config-read endpoint. Codex 0.136.0 exposes no structured
 keyring-unavailable error; map opaque provider failures to a static
 `ProviderRejected` result rather than matching or exposing provider text.
 
+Write this static configuration through the sidecar module's opaque provider-home
+capability using no-follow/create-new-or-verified-replace semantics and platform
+owner-only permissions. Do not reopen the home through an unchecked ambient path or
+duplicate the Unix/Windows filesystem security logic inside the Codex adapter.
+
 `CODEX_HOME` isolates filesystem configuration, but OpenAI does not document OS-keyring
 entries as namespaced by that path. Do not claim credential/keyring isolation. Warn
 that `carl auth logout openai` can affect another Codex CLI or IDE session for the same
@@ -353,7 +361,7 @@ OS user. Never fall back to plaintext auth storage.
 Commit:
 
 ```bash
-git add src/auth tests/codex_auth_contract.rs tests/support/sidecar.rs
+git add src/auth src/sidecar tests/codex_auth_contract.rs tests/sidecar_contract.rs tests/support/sidecar.rs
 git commit -m "feat: add isolated ChatGPT subscription login"
 ```
 
@@ -393,11 +401,12 @@ Add a fieldless, non-serializable `LoginChallenge::ProviderManaged` result to re
 this terminal-owned ceremony. Reject login when no foreground terminal can be attached;
 Telegram and other remote channels may query status but cannot initiate Grok login in
 V1. The `SubscriptionAuthBroker` contract is deliberately sequential: dropping the
-in-flight foreground login future is its cancellation boundary and must terminate the
-entire supervised process group/job before returning control; callers may then invoke
-`cancel_login` only as a best-effort reconciliation step. Test success, decline,
-timeout, future-drop cancellation, terminal absence, and process cleanup with a fake
-binary.
+in-flight foreground login future is its cancellation boundary. Its cancellation guard
+must synchronously start group/job termination while the broker retains the supervised
+process handle; callers then invoke `cancel_login` to boundedly reap the leader and
+reconcile status. Do not claim that Rust `Future::drop` can asynchronously reap a
+process before returning. Test success, decline, timeout, future-drop cancellation,
+bounded reconciliation, terminal absence, and process cleanup with a fake binary.
 
 Use `grok --no-auto-update agent stdio` only to perform a local
 `initialize`/authenticate handshake against the isolated `GROK_HOME`; ACP has no
@@ -409,12 +418,34 @@ Advertising `cached_token` means only that the method is supported. Carl must ca
 {"methodId":"cached_token","_meta":{"headless":true}}
 ```
 
-Report signed in only when that request returns an empty success result. Absence of
-the method or JSON-RPC authentication-required error `-32000` means signed out;
+Report signed in only when that request returns a success object containing no fields
+other than an optional bounded `_meta` object. The ACP documentation does not promise
+a literally empty authenticate result, while the pinned 0.2.111 artifact exposes an
+optional response metadata field. Absence of the method or JSON-RPC
+authentication-required error `-32000` means signed out;
 malformed/duplicate methods, wrong IDs or protocol versions, mixed result/error,
 unsupported requests, and protocol errors fail closed as `ProtocolMismatch`. Other
 well-formed provider failures map to `ProviderRejected` without inspecting message
 text.
+
+Before any Grok process starts, atomically write this Carl-owned policy to the isolated
+`$GROK_HOME/requirements.toml` through the same no-follow, owner-only provider-home
+capability used for Codex configuration:
+
+```toml
+[cli]
+auto_update = false
+
+[grok_com_config]
+disable_api_key_auth = true
+```
+
+The pinned 0.2.111 implementation can otherwise fall through from a missing or expired
+`cached_token` to another configured authentication source. In subscription mode,
+require that `xai.api_key` is not advertised and reject the handshake if it appears;
+clearing `XAI_API_KEY` alone is insufficient. Root-owned
+`/etc/grok/requirements.toml` remains the explicit trusted administrator policy
+boundary.
 
 Test:
 
